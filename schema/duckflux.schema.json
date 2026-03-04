@@ -106,11 +106,18 @@
     },
     "OverrideStep": {
       "type": "object",
+      "not": {
+        "anyOf": [
+          {"required": ["loop"]},
+          {"required": ["parallel"]},
+          {"required": ["if"]}
+        ]
+      },
       "properties": {
-        "use": {"type": "string"},
         "when": {"type": "string"},
         "timeout": {"type": "string"},
-        "onError": {"type": "string"}
+        "onError": {"type": "string"},
+        "input": {}
       }
     },
     "Defaults": {
