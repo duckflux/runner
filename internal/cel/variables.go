@@ -24,9 +24,10 @@ type StepResult struct {
 	Retries int64
 }
 
-// LoopContext holds loop iteration variables available as "_loop.*" inside a loop body.
-// Note: "loop" is a reserved identifier in CEL, so these are exposed under "_loop"
-// (e.g. `_loop.index`, `_loop.first`).
+// LoopContext holds loop iteration variables available as "loop.*" inside a loop body
+// (e.g. `loop.index`, `loop.first`). Internally, the runner rewrites "loop." to "_loop."
+// before passing expressions to the CEL compiler, because "loop" is a reserved keyword
+// in the CEL grammar.
 type LoopContext struct {
 	Index     int64
 	Iteration int64

@@ -20,8 +20,9 @@ func NewEnv(wf *model.Workflow) (*Environment, error) {
 		gcel.Variable("execution", gcel.MapType(gcel.StringType, gcel.DynType)),
 		gcel.Variable("input", gcel.MapType(gcel.StringType, gcel.DynType)),
 		gcel.Variable("env", gcel.MapType(gcel.StringType, gcel.StringType)),
-		// NOTE: "loop" is a reserved identifier in CEL, so the loop context is
-		// exposed as "_loop" (e.g. "_loop.index", "_loop.first").
+		// "loop" is a CEL reserved identifier, so the loop context variable is
+		// declared internally as "_loop". Expressions written with "loop." are
+		// transparently rewritten to "_loop." by Compile before type-checking.
 		gcel.Variable("_loop", gcel.MapType(gcel.StringType, gcel.DynType)),
 	}
 

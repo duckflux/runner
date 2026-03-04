@@ -1,15 +1,33 @@
 package cel
 
 import (
+	"regexp"
+
 	gcel "github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types/ref"
 )
 
+// loopIdentRe matches the identifier "loop" when followed by a dot, ensuring it
+// is not preceded by a word character (i.e. it is a standalone identifier).
+// This rewrites developer-facing "loop.x" references to the internal "_loop.x"
+// name, since "loop" is a reserved keyword in the CEL grammar.
+var loopIdentRe = regexp.MustCompile(`\bloop\.`)
+
+// rewriteLoopIdent transparently translates "loop." to "_loop." in an expression
+// so that workflow authors can write natural "loop.index", "loop.first", etc.
+// without knowing about the CEL reserved-identifier constraint.
+func rewriteLoopIdent(expr string) string {
+	return loopIdentRe.ReplaceAllString(expr, "_loop.")
+}
+
 // Compile parses and type-checks the CEL expression, returning a compiled Program
 // ready for repeated evaluation. Call this at parse/lint time to surface
 // syntax and type errors early.
+//
+// Occurrences of "loop." in expr are automatically rewritten to "_loop." before
+// compilation because "loop" is a reserved identifier in the CEL grammar.
 func (e *Environment) Compile(expr string) (gcel.Program, error) {
-	ast, issues := e.env.Compile(expr)
+	ast, issues := e.env.Compile(rewriteLoopIdent(expr))
 	if issues != nil && issues.Err() != nil {
 		return nil, issues.Err()
 	}

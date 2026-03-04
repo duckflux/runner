@@ -125,10 +125,10 @@ func TestCompileLoopVar(t *testing.T) {
 	wf := newTestWorkflow(nil, nil)
 	env, _ := NewEnv(wf)
 
-	// "loop" is a CEL reserved identifier; the loop context is exposed as "_loop".
-	_, err := env.Compile(`_loop.index > 3`)
+	// Developers write "loop.index"; the runner rewrites it to "_loop.index" internally.
+	_, err := env.Compile(`loop.index > 3`)
 	if err != nil {
-		t.Fatalf("Compile(`_loop.index > 3`) error: %v", err)
+		t.Fatalf("Compile(`loop.index > 3`) error: %v", err)
 	}
 }
 
@@ -285,7 +285,7 @@ func TestEvalStepOutputNotYetRun(t *testing.T) {
 func TestEvalLoopContext(t *testing.T) {
 	wf := newTestWorkflow(nil, nil)
 	env, _ := NewEnv(wf)
-	prog, _ := env.Compile(`_loop.index > 2`)
+	prog, _ := env.Compile(`loop.index > 2`)
 
 	state := &State{
 		Loop: &LoopContext{Index: 3, Iteration: 3, First: false, Last: false},
@@ -295,14 +295,14 @@ func TestEvalLoopContext(t *testing.T) {
 		t.Fatalf("Eval() error: %v", err)
 	}
 	if result != true {
-		t.Errorf("Eval(_loop.index > 2) = %v, want true (index=3)", result)
+		t.Errorf("Eval(loop.index > 2) = %v, want true (index=3)", result)
 	}
 }
 
 func TestEvalLoopFirst(t *testing.T) {
 	wf := newTestWorkflow(nil, nil)
 	env, _ := NewEnv(wf)
-	prog, _ := env.Compile(`_loop.first == true`)
+	prog, _ := env.Compile(`loop.first == true`)
 
 	state := &State{
 		Loop: &LoopContext{Index: 0, Iteration: 1, First: true, Last: false},
@@ -312,16 +312,16 @@ func TestEvalLoopFirst(t *testing.T) {
 		t.Fatalf("Eval() error: %v", err)
 	}
 	if result != true {
-		t.Errorf("Eval(_loop.first == true) = %v, want true", result)
+		t.Errorf("Eval(loop.first == true) = %v, want true", result)
 	}
 }
 
 func TestEvalNilLoopContext(t *testing.T) {
-	// Outside a loop, _loop context should be an empty map — has() returns false for absent keys.
+	// Outside a loop, loop context should be an empty map — has() returns false for absent keys.
 	wf := newTestWorkflow(nil, nil)
 	env, _ := NewEnv(wf)
 
-	prog, err := env.Compile(`has(_loop.index)`)
+	prog, err := env.Compile(`has(loop.index)`)
 	if err != nil {
 		t.Fatalf("Compile error: %v", err)
 	}
@@ -330,7 +330,30 @@ func TestEvalNilLoopContext(t *testing.T) {
 		t.Fatalf("Eval() error: %v", err)
 	}
 	if result != false {
-		t.Errorf("Eval(has(_loop.index)) outside loop = %v, want false", result)
+		t.Errorf("Eval(has(loop.index)) outside loop = %v, want false", result)
+	}
+}
+
+// TestRewriteLoopIdent verifies the transparent loop→_loop identifier rewriting.
+func TestRewriteLoopIdent(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"loop.index > 3", "_loop.index > 3"},
+		{"loop.first == true", "_loop.first == true"},
+		{"loop.last || loop.index == 0", "_loop.last || _loop.index == 0"},
+		// Must not rewrite identifiers that merely contain "loop".
+		{"myloop.index > 3", "myloop.index > 3"},
+		{"looping.value", "looping.value"},
+		// No "loop." present — unchanged.
+		{"workflow.id == 'x'", "workflow.id == 'x'"},
+	}
+	for _, tc := range tests {
+		got := rewriteLoopIdent(tc.input)
+		if got != tc.want {
+			t.Errorf("rewriteLoopIdent(%q) = %q, want %q", tc.input, got, tc.want)
+		}
 	}
 }
 
