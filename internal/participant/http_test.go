@@ -20,7 +20,7 @@ func newHTTP(def model.Participant, ts *httptest.Server) *HTTPParticipant {
 
 func TestHTTPGetReturnsBody(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("hello http"))
+		_, _ = w.Write([]byte("hello http"))
 	}))
 	defer ts.Close()
 
@@ -40,7 +40,7 @@ func TestHTTPGetReturnsBody(t *testing.T) {
 
 func TestHTTPDefaultMethodIsGET(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(r.Method))
+		_, _ = w.Write([]byte(r.Method))
 	}))
 	defer ts.Close()
 
@@ -62,7 +62,7 @@ func TestHTTPPostWithStringBody(t *testing.T) {
 			return
 		}
 		body, _ := io.ReadAll(r.Body)
-		w.Write(body)
+		_, _ = w.Write(body)
 	}))
 	defer ts.Close()
 
@@ -84,7 +84,7 @@ func TestHTTPPostWithMapBody(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(m)
+		_ = json.NewEncoder(w).Encode(m)
 	}))
 	defer ts.Close()
 
@@ -106,7 +106,7 @@ func TestHTTPPostWithMapBody(t *testing.T) {
 func TestHTTPInputUsedAsBodyWhenBodyNotSet(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		w.Write(body)
+		_, _ = w.Write(body)
 	}))
 	defer ts.Close()
 
@@ -122,7 +122,7 @@ func TestHTTPInputUsedAsBodyWhenBodyNotSet(t *testing.T) {
 
 func TestHTTPCustomHeaders(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(r.Header.Get("X-Custom")))
+		_, _ = w.Write([]byte(r.Header.Get("X-Custom")))
 	}))
 	defer ts.Close()
 
@@ -170,7 +170,7 @@ func TestHTTPContextCancellation(t *testing.T) {
 		case <-r.Context().Done():
 		case <-time.After(10 * time.Second):
 		}
-		w.Write([]byte("too late"))
+		_, _ = w.Write([]byte("too late"))
 	}))
 	defer ts.Close()
 
@@ -193,7 +193,7 @@ func TestHTTPContextCancellation(t *testing.T) {
 func TestHTTPJSONResponseAutoDecoded(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"ok","count":3}`))
+		_, _ = w.Write([]byte(`{"status":"ok","count":3}`))
 	}))
 	defer ts.Close()
 
@@ -214,7 +214,7 @@ func TestHTTPJSONResponseAutoDecoded(t *testing.T) {
 func TestHTTPBodyDefinitionOverridesInput(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		w.Write(body)
+		_, _ = w.Write(body)
 	}))
 	defer ts.Close()
 
