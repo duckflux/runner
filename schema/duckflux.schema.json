@@ -1,0 +1,140 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://duckflux.dev/schema/duckflux.schema.json",
+  "title": "duckflux Workflow",
+  "description": "JSON Schema for duckflux workflow definition files (.flow.yaml)",
+  "type": "object",
+  "required": ["id", "participants", "flow"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique workflow identifier"
+    },
+    "name": {
+      "type": "string",
+      "description": "Human-readable workflow name"
+    },
+    "version": {
+      "type": "string",
+      "description": "Workflow version string"
+    },
+    "participants": {
+      "type": "object",
+      "description": "Named participant definitions",
+      "additionalProperties": {
+        "$ref": "#/definitions/Participant"
+      }
+    },
+    "flow": {
+      "type": "array",
+      "description": "Ordered list of flow steps",
+      "items": {
+        "$ref": "#/definitions/FlowStep"
+      }
+    },
+    "defaults": {
+      "$ref": "#/definitions/Defaults"
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/InputField"
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  },
+  "definitions": {
+    "Participant": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["exec", "http", "human", "workflow", "agent", "mcp"]
+        },
+        "timeout": {
+          "type": "string"
+        },
+        "onError": {
+          "type": "string"
+        },
+        "retry": {
+          "$ref": "#/definitions/RetryConfig"
+        }
+      }
+    },
+    "FlowStep": {
+      "oneOf": [
+        {"type": "string"},
+        {"$ref": "#/definitions/LoopStep"},
+        {"$ref": "#/definitions/ParallelStep"},
+        {"$ref": "#/definitions/IfStep"},
+        {"$ref": "#/definitions/OverrideStep"}
+      ]
+    },
+    "LoopStep": {
+      "type": "object",
+      "required": ["loop"],
+      "properties": {
+        "loop": {
+          "type": "object"
+        }
+      }
+    },
+    "ParallelStep": {
+      "type": "object",
+      "required": ["parallel"],
+      "properties": {
+        "parallel": {
+          "type": "array"
+        }
+      }
+    },
+    "IfStep": {
+      "type": "object",
+      "required": ["if", "then"],
+      "properties": {
+        "if": {"type": "string"},
+        "then": {"type": "array"},
+        "else": {"type": "array"}
+      }
+    },
+    "OverrideStep": {
+      "type": "object",
+      "properties": {
+        "use": {"type": "string"},
+        "when": {"type": "string"},
+        "timeout": {"type": "string"},
+        "onError": {"type": "string"}
+      }
+    },
+    "Defaults": {
+      "type": "object",
+      "properties": {
+        "timeout": {"type": "string"},
+        "onError": {"type": "string"}
+      }
+    },
+    "InputField": {
+      "type": "object",
+      "properties": {
+        "type": {"type": "string"},
+        "required": {"type": "boolean"},
+        "default": {}
+      }
+    },
+    "RetryConfig": {
+      "type": "object",
+      "properties": {
+        "max": {"type": "integer"},
+        "backoff": {"type": "string"},
+        "factor": {"type": "number"}
+      }
+    }
+  }
+}
