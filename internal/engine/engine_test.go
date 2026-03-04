@@ -1102,6 +1102,87 @@ func (f *funcParticipant) Execute(ctx context.Context, input any) (any, error) {
 	return f.fn(ctx, input)
 }
 
+// ----- Sub-workflow (workflow participant) -----
+
+// TestRunSubWorkflowComposition verifies that a WorkflowParticipant can be
+// wired into a parent workflow's registry so that the child's output is
+// propagated to the parent's step result and then to the parent's output.
+func TestRunSubWorkflowComposition(t *testing.T) {
+	// Child workflow: a single exec-like step that returns a greeting.
+	childWF := &model.Workflow{
+		ID: "child",
+		Inputs: map[string]model.InputField{
+			"name": {Default: "world"},
+		},
+		Participants: map[string]model.Participant{
+			"greet": {Type: model.ParticipantTypeExec},
+		},
+		Flow: []model.FlowStep{{Participant: "greet"}},
+	}
+	childMock := &mockParticipant{}
+
+	// SubWorkflowRunnerFunc: runs the child workflow using the real engine.Run.
+	// This is the closure that the CLI layer would provide in production.
+	childRunner := participant.SubWorkflowRunnerFunc(func(ctx context.Context, path string, inputs map[string]any, env map[string]string) (any, error) {
+		name, _ := inputs["name"].(string)
+		childMock.output = "hello, " + name
+		childReg := participant.Registry{"greet": childMock}
+		return Run(ctx, childWF, inputs, env, childReg)
+	})
+
+	// Build the workflow participant and add it to the parent registry.
+	subWFParticipant, err := participant.NewWorkflow("child.flow.yaml", nil, childRunner)
+	if err != nil {
+		t.Fatalf("NewWorkflow() error: %v", err)
+	}
+
+	// Parent workflow: calls the sub-workflow participant and exposes its output.
+	parentWF := &model.Workflow{
+		ID: "parent",
+		Participants: map[string]model.Participant{
+			"sub": {
+				Type:  model.ParticipantTypeWorkflow,
+				Path:  "child.flow.yaml",
+				Input: map[string]interface{}{"name": `"alice"`},
+			},
+		},
+		Flow: []model.FlowStep{{Participant: "sub"}},
+	}
+	parentReg := participant.Registry{"sub": subWFParticipant}
+
+	out, err := Run(context.Background(), parentWF, nil, nil, parentReg)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if out != "hello, alice" {
+		t.Errorf("Run() = %v, want 'hello, alice'", out)
+	}
+}
+
+// TestRunSubWorkflowErrorPropagated verifies that a failure inside a child
+// workflow is surfaced as an error in the parent.
+func TestRunSubWorkflowErrorPropagated(t *testing.T) {
+	childRunner := participant.SubWorkflowRunnerFunc(func(_ context.Context, _ string, _ map[string]any, _ map[string]string) (any, error) {
+		return nil, fmt.Errorf("child workflow exploded")
+	})
+
+	subWFParticipant, _ := participant.NewWorkflow("bad.flow.yaml", nil, childRunner)
+
+	parentWF := &model.Workflow{
+		ID: "parent",
+		Participants: map[string]model.Participant{
+			"sub": {Type: model.ParticipantTypeWorkflow, Path: "bad.flow.yaml"},
+		},
+		Flow: []model.FlowStep{{Participant: "sub"}},
+	}
+	parentReg := participant.Registry{"sub": subWFParticipant}
+
+	_, err := Run(context.Background(), parentWF, nil, nil, parentReg)
+	if err == nil {
+		t.Fatal("Run() expected error from failed sub-workflow, got nil")
+	}
+}
+
 // mustNewEnv creates a cel.Environment for a workflow with the given participant
 // names and input fields, calling t.Fatal on error.
 func mustNewEnv(t *testing.T, participants []string, inputs map[string]model.InputField) *cel.Environment {
