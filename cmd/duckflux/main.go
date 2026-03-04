@@ -326,8 +326,7 @@ func collectEnv() map[string]string {
 // callerDir is the directory of the workflow that contains the sub-workflow
 // reference; relative paths are resolved against it.
 func makeSubWorkflowRunner(callerDir string) participant.SubWorkflowRunnerFunc {
-	var fn participant.SubWorkflowRunnerFunc
-	fn = func(ctx context.Context, path string, inputs map[string]any, env map[string]string) (any, error) {
+	return func(ctx context.Context, path string, inputs map[string]any, env map[string]string) (any, error) {
 		// Resolve the path relative to the calling workflow's directory when it
 		// is not an absolute path, so that sub-workflows can be co-located with
 		// their parent regardless of the process working directory.
@@ -356,7 +355,6 @@ func makeSubWorkflowRunner(callerDir string) participant.SubWorkflowRunnerFunc {
 
 		return engine.Run(ctx, wf, inputs, env, reg)
 	}
-	return fn
 }
 
 // printOutput writes the workflow output to cmd's stdout.
