@@ -94,28 +94,33 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 	if override != nil {
 		when = override.When
 	}
-	if execErr != nil {
-		switch onErr {
-		case "skip":
+	if when != "" {
+		prog, err := celEnv.Compile(when)
+		if err != nil {
+			return fmt.Errorf("participant %q: compiling when guard: %w", name, err)
+		}
+		result, err := celEnv.Eval(prog, state)
+		if err != nil {
+			return fmt.Errorf("participant %q: evaluating when guard: %w", name, err)
+		}
+		if cond, _ := result.(bool); !cond {
 			state.SetStep(name, &cel.StepResult{Status: "skipped"})
 			return nil
-		case "retry":
-			state.SetStep(name, &cel.StepResult{Status: "failed", Retries: int64(retries)})
-			return fmt.Errorf("participant %q failed after %d retries: %w", name, retries, execErr)
-		case "fail":
-			state.SetStep(name, &cel.StepResult{Status: "failed"})
-			return fmt.Errorf("participant %q failed: %w", name, execErr)
-		default:
-			// onErr is a participant name — execute it as a fallback
-			// (redirect). Force onError="fail" for the fallback to
-			// prevent infinite redirect chains.
-			state.SetStep(name, &cel.StepResult{Status: "failed"})
-			fallbackOverride := &model.ParticipantOverrideStep{OnError: "fail"}
-			if redirectErr := runParticipantStep(ctx, wf, onErr, fallbackOverride, state, celEnv, reg); redirectErr != nil {
-				return fmt.Errorf("participant %q failed and fallback %q also failed: %w", name, onErr, redirectErr)
-			}
-			return nil
 		}
+	}
+
+	// Determine the effective input: flow-level override takes priority.
+	var rawInput interface{}
+	if override != nil && override.Input != nil {
+		rawInput = override.Input
+	} else {
+		rawInput = def.Input
+	}
+
+	// Evaluate input CEL expressions to produce the concrete input value.
+	input, err := evalInput(rawInput, state, celEnv)
+	if err != nil {
+		return fmt.Errorf("participant %q: evaluating input: %w", name, err)
 	}
 
 	// Apply timeout: derive a child context with the resolved deadline, if any.
@@ -139,22 +144,16 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 		case "skip":
 			state.SetStep(name, &cel.StepResult{Status: "skipped"})
 			return nil
-<<<<<<< HEAD
 		case "retry":
-			state.Steps[name] = &cel.StepResult{Status: "failed", Retries: int64(retries)}
+			state.SetStep(name, &cel.StepResult{Status: "failed", Retries: int64(retries)})
 			return fmt.Errorf("participant %q failed after %d retries: %w", name, retries, execErr)
 		case "fail":
-			state.Steps[name] = &cel.StepResult{Status: "failed"}
-=======
-		default:
-			// "fail" is the default; redirect (to another participant) is Phase 4d.
 			state.SetStep(name, &cel.StepResult{Status: "failed"})
->>>>>>> pr_head
 			return fmt.Errorf("participant %q failed: %w", name, execErr)
 		default:
 			// onErr is a participant name — execute it as a fallback (redirect).
 			// Force onError="fail" for the fallback to prevent infinite redirect chains.
-			state.Steps[name] = &cel.StepResult{Status: "failed"}
+			state.SetStep(name, &cel.StepResult{Status: "failed"})
 			fallbackOverride := &model.ParticipantOverrideStep{OnError: "fail"}
 			if redirectErr := runParticipantStep(ctx, wf, onErr, fallbackOverride, state, celEnv, reg); redirectErr != nil {
 				return fmt.Errorf("participant %q failed and fallback %q also failed: %w", name, onErr, redirectErr)

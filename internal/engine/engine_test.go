@@ -1081,6 +1081,27 @@ func TestRunTimeoutViaDefaults(t *testing.T) {
 
 // ----- helpers -----
 
+// countingParticipant tracks how many times Execute is called and returns
+// a string representation of the call count as its output.
+type countingParticipant struct {
+	calls int
+}
+
+func (c *countingParticipant) Execute(_ context.Context, _ any) (any, error) {
+	c.calls++
+	return fmt.Sprintf("%d", c.calls), nil
+}
+
+// funcParticipant delegates Execute to an arbitrary function, useful for
+// capturing loop-context values passed as inputs.
+type funcParticipant struct {
+	fn func(context.Context, any) (any, error)
+}
+
+func (f *funcParticipant) Execute(ctx context.Context, input any) (any, error) {
+	return f.fn(ctx, input)
+}
+
 // mustNewEnv creates a cel.Environment for a workflow with the given participant
 // names and input fields, calling t.Fatal on error.
 func mustNewEnv(t *testing.T, participants []string, inputs map[string]model.InputField) *cel.Environment {
