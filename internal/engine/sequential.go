@@ -11,6 +11,17 @@ import (
 	"github.com/duckflux/runner/internal/participant"
 )
 
+// withStepTimeout derives a child context that is cancelled after the resolved
+// timeout duration. It returns the child context and a cancel function that must
+// be called to release resources. If there is no effective timeout, the parent
+// context is returned unchanged along with a no-op cancel function.
+func withStepTimeout(ctx context.Context, def model.Participant, override *model.ParticipantOverrideStep, wf *model.Workflow) (context.Context, context.CancelFunc) {
+	if d := resolveTimeout(def, override, wf); d != nil {
+		return context.WithTimeout(ctx, d.Duration)
+	}
+	return ctx, func() {}
+}
+
 // runSequential iterates over a slice of flow steps, executing each in order.
 // It returns the name of the last participant step that was executed (not skipped),
 // which is used to derive the implicit workflow output when no explicit output is
@@ -102,6 +113,10 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 		return fmt.Errorf("participant %q: evaluating input: %w", name, err)
 	}
 
+	// Apply timeout: derive a child context with the resolved deadline, if any.
+	stepCtx, cancel := withStepTimeout(ctx, def, override, wf)
+	defer cancel()
+
 	// Determine the onError strategy up-front so we can pass a retry config to
 	// executeWithRetry when the strategy is "retry".
 	onErr := resolveOnError(def, override, wf)
@@ -111,8 +126,8 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 	}
 
 	// Execute the participant, retrying with exponential backoff when configured.
-	out, retries, execErr := executeWithRetry(ctx, func() (any, error) {
-		return p.Execute(ctx, input)
+	out, retries, execErr := executeWithRetry(stepCtx, func() (any, error) {
+		return p.Execute(stepCtx, input)
 	}, retryConfig)
 	if execErr != nil {
 		switch onErr {
