@@ -794,9 +794,6 @@ func TestRunIfThenBranchExecuted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
-	if mpThen.capturedInput == nil && mpThen.output == nil {
-		// Execute was called — any non-nil output is fine.
-	}
 	if mpElse.capturedInput != nil {
 		t.Error("elseStep should not have been called when condition is true")
 	}
