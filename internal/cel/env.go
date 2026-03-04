@@ -82,6 +82,8 @@ func (e *Environment) Bindings(s *State) map[string]any {
 	}
 
 	// Provide bindings for all declared participants; default to empty map for unrun steps.
+	// Take a read lock so that parallel goroutines writing to Steps don't race.
+	s.mu.RLock()
 	for _, name := range e.participants {
 		if result, ok := s.Steps[name]; ok {
 			vars[name] = map[string]any{
@@ -93,6 +95,7 @@ func (e *Environment) Bindings(s *State) map[string]any {
 			vars[name] = map[string]any{}
 		}
 	}
+	s.mu.RUnlock()
 
 	return vars
 }

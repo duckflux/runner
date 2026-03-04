@@ -46,10 +46,20 @@ func runFlowStep(ctx context.Context, wf *model.Workflow, step model.FlowStep, s
 		}
 		return name, nil
 
-	case step.Loop != nil, step.Parallel != nil, step.If != nil:
-		// Control-flow constructs are handled by engine/control.go (Phase 4b).
-		// Return an error so the caller knows these are not yet supported.
-		return "", fmt.Errorf("control-flow steps (loop/parallel/if) are not yet implemented")
+	case step.Loop != nil:
+		if err := runLoop(ctx, wf, step.Loop, state, celEnv, reg); err != nil {
+			return "", err
+		}
+		return "", nil
+
+	case step.Parallel != nil:
+		if err := runParallel(ctx, wf, step.Parallel, state, celEnv, reg); err != nil {
+			return "", err
+		}
+		return "", nil
+
+	case step.If != nil:
+		return runIf(ctx, wf, step.If, state, celEnv, reg)
 
 	default:
 		return "", fmt.Errorf("unsupported flow step type")
@@ -83,7 +93,7 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 			return fmt.Errorf("participant %q: evaluating when guard: %w", name, err)
 		}
 		if cond, _ := result.(bool); !cond {
-			state.Steps[name] = &cel.StepResult{Status: "skipped"}
+			state.SetStep(name, &cel.StepResult{Status: "skipped"})
 			return nil
 		}
 	}
@@ -108,11 +118,11 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 		onErr := resolveOnError(def, override, wf)
 		switch onErr {
 		case "skip":
-			state.Steps[name] = &cel.StepResult{Status: "skipped"}
+			state.SetStep(name, &cel.StepResult{Status: "skipped"})
 			return nil
 		default:
 			// "fail" is the default; redirect (to another participant) is Phase 4d.
-			state.Steps[name] = &cel.StepResult{Status: "failed"}
+			state.SetStep(name, &cel.StepResult{Status: "failed"})
 			return fmt.Errorf("participant %q failed: %w", name, execErr)
 		}
 	}
@@ -120,11 +130,11 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 	// Apply JSON auto-detection: attempt to parse string outputs as JSON.
 	out = autoDetectJSON(out)
 
-	state.Steps[name] = &cel.StepResult{
+	state.SetStep(name, &cel.StepResult{
 		Output:  out,
 		Status:  "success",
 		Retries: 0,
-	}
+	})
 	return nil
 }
 
