@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/duckflux/runner/internal/cel"
 	"github.com/duckflux/runner/internal/model"
@@ -103,7 +105,11 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 		if err != nil {
 			return fmt.Errorf("participant %q: evaluating when guard: %w", name, err)
 		}
-		if cond, _ := result.(bool); !cond {
+		cond, ok := result.(bool)
+		if !ok {
+			return fmt.Errorf("participant %q: when guard must evaluate to bool, got %T", name, result)
+		}
+		if !cond {
 			state.SetStep(name, &cel.StepResult{Status: "skipped"})
 			return nil
 		}
@@ -136,24 +142,58 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 	}
 
 	// Execute the participant, retrying with exponential backoff when configured.
+	startedAt := time.Now()
+	slog.Debug("step starting", "participant", name)
 	out, retries, execErr := executeWithRetry(stepCtx, func() (any, error) {
 		return p.Execute(stepCtx, input)
 	}, retryConfig)
+	finishedAt := time.Now()
+	elapsed := finishedAt.Sub(startedAt)
+	startedAtStr := startedAt.UTC().Format(time.RFC3339)
+	finishedAtStr := finishedAt.UTC().Format(time.RFC3339)
+	durationStr := elapsed.String()
+
 	if execErr != nil {
+		slog.Debug("step failed", "participant", name, "duration", durationStr, "error", execErr)
 		switch onErr {
 		case "skip":
-			state.SetStep(name, &cel.StepResult{Status: "skipped"})
+			state.SetStep(name, &cel.StepResult{
+				Status:     "skipped",
+				StartedAt:  startedAtStr,
+				FinishedAt: finishedAtStr,
+				Duration:   durationStr,
+				Error:      execErr.Error(),
+			})
 			return nil
 		case "retry":
-			state.SetStep(name, &cel.StepResult{Status: "failed", Retries: int64(retries)})
+			state.SetStep(name, &cel.StepResult{
+				Status:     "failed",
+				Retries:    int64(retries),
+				StartedAt:  startedAtStr,
+				FinishedAt: finishedAtStr,
+				Duration:   durationStr,
+				Error:      execErr.Error(),
+			})
 			return fmt.Errorf("participant %q failed after %d retries: %w", name, retries, execErr)
 		case "fail":
-			state.SetStep(name, &cel.StepResult{Status: "failed"})
+			state.SetStep(name, &cel.StepResult{
+				Status:     "failed",
+				StartedAt:  startedAtStr,
+				FinishedAt: finishedAtStr,
+				Duration:   durationStr,
+				Error:      execErr.Error(),
+			})
 			return fmt.Errorf("participant %q failed: %w", name, execErr)
 		default:
 			// onErr is a participant name — execute it as a fallback (redirect).
 			// Force onError="fail" for the fallback to prevent infinite redirect chains.
-			state.SetStep(name, &cel.StepResult{Status: "failed"})
+			state.SetStep(name, &cel.StepResult{
+				Status:     "failed",
+				StartedAt:  startedAtStr,
+				FinishedAt: finishedAtStr,
+				Duration:   durationStr,
+				Error:      execErr.Error(),
+			})
 			fallbackOverride := &model.ParticipantOverrideStep{OnError: "fail"}
 			if redirectErr := runParticipantStep(ctx, wf, onErr, fallbackOverride, state, celEnv, reg); redirectErr != nil {
 				return fmt.Errorf("participant %q failed and fallback %q also failed: %w", name, onErr, redirectErr)
@@ -165,10 +205,14 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 	// Apply JSON auto-detection: attempt to parse string outputs as JSON.
 	out = autoDetectJSON(out)
 
+	slog.Debug("step completed", "participant", name, "status", "success", "duration", durationStr)
 	state.SetStep(name, &cel.StepResult{
-		Output:  out,
-		Status:  "success",
-		Retries: int64(retries),
+		Output:     out,
+		Status:     "success",
+		Retries:    int64(retries),
+		StartedAt:  startedAtStr,
+		FinishedAt: finishedAtStr,
+		Duration:   durationStr,
 	})
 	return nil
 }

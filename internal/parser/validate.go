@@ -126,6 +126,9 @@ func validateFlowSteps(steps []model.FlowStep, participants map[string]model.Par
 			if step.Override.When != "" {
 				compileCEL(celEnv, step.Override.When, stepPath+".when", errs)
 			}
+			if step.Override.Input != nil {
+				validateInputCEL(step.Override.Input, stepPath+".input", celEnv, errs)
+			}
 
 		case step.Loop != nil:
 			loop := step.Loop
@@ -180,12 +183,18 @@ func validateOnError(onError string, participants map[string]model.Participant, 
 // validateParticipantCEL compiles CEL expressions embedded in a participant definition.
 func validateParticipantCEL(p model.Participant, name string, celEnv *cel.Environment, errs *ValidationErrors) {
 	base := fmt.Sprintf("/participants/%s", name)
-	// input map values may be CEL expressions
-	if inputMap, ok := p.Input.(map[string]interface{}); ok {
-		for field, val := range inputMap {
-			if expr, ok := val.(string); ok {
-				compileCEL(celEnv, expr, fmt.Sprintf("%s/input/%s", base, field), errs)
-			}
+	validateInputCEL(p.Input, base+"/input", celEnv, errs)
+}
+
+// validateInputCEL recursively compiles CEL expressions within an input value.
+// String values are treated as CEL expressions; map values recurse into each entry.
+func validateInputCEL(raw interface{}, path string, celEnv *cel.Environment, errs *ValidationErrors) {
+	switch v := raw.(type) {
+	case string:
+		compileCEL(celEnv, v, path, errs)
+	case map[string]interface{}:
+		for field, val := range v {
+			validateInputCEL(val, fmt.Sprintf("%s/%s", path, field), celEnv, errs)
 		}
 	}
 }

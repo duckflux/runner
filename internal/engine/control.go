@@ -66,7 +66,11 @@ func runLoop(ctx context.Context, wf *model.Workflow, step *model.LoopStep, stat
 			if err != nil {
 				return fmt.Errorf("loop: evaluating until expression: %w", err)
 			}
-			if done, _ := result.(bool); done {
+			done, ok := result.(bool)
+			if !ok {
+				return fmt.Errorf("loop: until expression must evaluate to bool, got %T", result)
+			}
+			if done {
 				break
 			}
 		}
@@ -126,8 +130,10 @@ func runIf(ctx context.Context, wf *model.Workflow, step *model.IfStep, state *c
 		return "", fmt.Errorf("if: evaluating condition: %w", err)
 	}
 
-	if cond, _ := result.(bool); cond {
+	if cond, ok := result.(bool); ok && cond {
 		return runSequential(ctx, wf, step.Then, state, celEnv, reg)
+	} else if !ok {
+		return "", fmt.Errorf("if: condition must evaluate to bool, got %T", result)
 	}
 	if len(step.Else) > 0 {
 		return runSequential(ctx, wf, step.Else, state, celEnv, reg)
