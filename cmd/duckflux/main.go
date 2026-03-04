@@ -5,6 +5,8 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+
+	"github.com/duckflux/runner/internal/parser"
 )
 
 var rootCmd = &cobra.Command{
@@ -28,7 +30,16 @@ var lintCmd = &cobra.Command{
 	Short: "Parse and validate a workflow without executing it",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Fprintln(cmd.ErrOrStderr(), "lint: not yet implemented")
+		f, err := os.Open(args[0])
+		if err != nil {
+			return fmt.Errorf("opening file: %w", err)
+		}
+		defer f.Close()
+
+		if _, err := parser.Parse(f); err != nil {
+			return err
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), "OK")
 		return nil
 	},
 }
