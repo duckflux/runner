@@ -102,18 +102,38 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 		return fmt.Errorf("participant %q: evaluating input: %w", name, err)
 	}
 
-	// Execute the participant.
-	out, execErr := p.Execute(ctx, input)
+	// Determine the onError strategy up-front so we can pass a retry config to
+	// executeWithRetry when the strategy is "retry".
+	onErr := resolveOnError(def, override, wf)
+	var retryConfig *model.RetryConfig
+	if onErr == "retry" {
+		retryConfig = def.Retry
+	}
+
+	// Execute the participant, retrying with exponential backoff when configured.
+	out, retries, execErr := executeWithRetry(ctx, func() (any, error) {
+		return p.Execute(ctx, input)
+	}, retryConfig)
 	if execErr != nil {
-		onErr := resolveOnError(def, override, wf)
 		switch onErr {
 		case "skip":
 			state.Steps[name] = &cel.StepResult{Status: "skipped"}
 			return nil
-		default:
-			// "fail" is the default; redirect (to another participant) is Phase 4d.
+		case "retry":
+			state.Steps[name] = &cel.StepResult{Status: "failed", Retries: int64(retries)}
+			return fmt.Errorf("participant %q failed after %d retries: %w", name, retries, execErr)
+		case "fail":
 			state.Steps[name] = &cel.StepResult{Status: "failed"}
 			return fmt.Errorf("participant %q failed: %w", name, execErr)
+		default:
+			// onErr is a participant name — execute it as a fallback (redirect).
+			// Force onError="fail" for the fallback to prevent infinite redirect chains.
+			state.Steps[name] = &cel.StepResult{Status: "failed"}
+			fallbackOverride := &model.ParticipantOverrideStep{OnError: "fail"}
+			if redirectErr := runParticipantStep(ctx, wf, onErr, fallbackOverride, state, celEnv, reg); redirectErr != nil {
+				return fmt.Errorf("participant %q failed and fallback %q also failed: %w", name, onErr, redirectErr)
+			}
+			return nil
 		}
 	}
 
@@ -123,7 +143,7 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 	state.Steps[name] = &cel.StepResult{
 		Output:  out,
 		Status:  "success",
-		Retries: 0,
+		Retries: int64(retries),
 	}
 	return nil
 }
