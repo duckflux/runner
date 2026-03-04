@@ -1,0 +1,27 @@
+id: loop-example
+name: Loop Workflow
+version: "1"
+
+inputs:
+  max_rounds:
+    type: integer
+    default: 3
+    description: "Maximum number of loop iterations"
+
+participants:
+  counter:
+    type: exec
+    run: echo "running iteration"
+    timeout: 5s
+
+  check:
+    type: exec
+    run: echo "checking progress"
+    timeout: 5s
+
+flow:
+  - loop:
+      max: 3
+      steps:
+        - counter
+        - check
