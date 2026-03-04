@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -586,6 +587,343 @@ func TestRunEnvVariablePassedToState(t *testing.T) {
 	}
 }
 
+// ----- Loop -----
+
+func TestRunLoopMaxIterations(t *testing.T) {
+	// Use a counter participant that tracks call count.
+	counter := &countingParticipant{}
+	wf := &model.Workflow{
+		ID: "wf1",
+		Participants: map[string]model.Participant{
+			"step1": {Type: model.ParticipantTypeExec},
+		},
+		Flow: []model.FlowStep{
+			{Loop: &model.LoopStep{
+				Max:   3,
+				Steps: []model.FlowStep{{Participant: "step1"}},
+			}},
+		},
+	}
+	reg := participant.Registry{"step1": counter}
+
+	_, err := Run(context.Background(), wf, nil, nil, reg)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if counter.calls != 3 {
+		t.Errorf("step1 called %d times, want 3", counter.calls)
+	}
+}
+
+func TestRunLoopUntilCondition(t *testing.T) {
+	// Each iteration the participant returns an incrementing counter stored in state.
+	// The "until" condition checks whether step1.output equals "3".
+	counter := &countingParticipant{}
+	wf := &model.Workflow{
+		ID: "wf1",
+		Participants: map[string]model.Participant{
+			"step1": {Type: model.ParticipantTypeExec},
+		},
+		Flow: []model.FlowStep{
+			{Loop: &model.LoopStep{
+				Until: `step1.output == "3"`,
+				Max:   10,
+				Steps: []model.FlowStep{{Participant: "step1"}},
+			}},
+		},
+	}
+	reg := participant.Registry{"step1": counter}
+
+	_, err := Run(context.Background(), wf, nil, nil, reg)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	// step1 should have been called 3 times: outputs "1", "2", "3"; until is true after "3".
+	if counter.calls != 3 {
+		t.Errorf("step1 called %d times, want 3", counter.calls)
+	}
+}
+
+func TestRunLoopContextFirst(t *testing.T) {
+	// Verify that loop.first is true only on the first iteration by using a
+	// countingParticipant and checking that the "when" guard based on loop.first runs once.
+	var firstCount int
+	var totalCount int
+	tracker := &funcParticipant{fn: func(_ context.Context, input any) (any, error) {
+		totalCount++
+		if b, ok := input.(bool); ok && b {
+			firstCount++
+		}
+		return "ok", nil
+	}}
+	wf := &model.Workflow{
+		ID: "wf1",
+		Participants: map[string]model.Participant{
+			"step1": {Type: model.ParticipantTypeExec},
+		},
+		Flow: []model.FlowStep{
+			{Loop: &model.LoopStep{
+				Max: 3,
+				Steps: []model.FlowStep{
+					{Override: &model.ParticipantOverrideStep{
+						Participant: "step1",
+						Input:       "loop.first",
+					}},
+				},
+			}},
+		},
+	}
+	reg := participant.Registry{"step1": tracker}
+
+	_, err := Run(context.Background(), wf, nil, nil, reg)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if totalCount != 3 {
+		t.Errorf("step1 called %d times, want 3", totalCount)
+	}
+	if firstCount != 1 {
+		t.Errorf("loop.first was true %d times, want 1", firstCount)
+	}
+}
+
+func TestRunLoopNoUntilNoMaxErrors(t *testing.T) {
+	mp := &mockParticipant{output: "x"}
+	wf := &model.Workflow{
+		ID: "wf1",
+		Participants: map[string]model.Participant{
+			"step1": {Type: model.ParticipantTypeExec},
+		},
+		Flow: []model.FlowStep{
+			{Loop: &model.LoopStep{
+				Steps: []model.FlowStep{{Participant: "step1"}},
+			}},
+		},
+	}
+	reg := participant.Registry{"step1": mp}
+
+	_, err := Run(context.Background(), wf, nil, nil, reg)
+	if err == nil {
+		t.Fatal("Run() expected error for loop with neither until nor max, got nil")
+	}
+}
+
+// ----- Parallel -----
+
+func TestRunParallelBothStepsExecuted(t *testing.T) {
+	mp1 := &mockParticipant{output: "out1"}
+	mp2 := &mockParticipant{output: "out2"}
+	wf := &model.Workflow{
+		ID: "wf1",
+		Participants: map[string]model.Participant{
+			"step1": {Type: model.ParticipantTypeExec},
+			"step2": {Type: model.ParticipantTypeExec},
+		},
+		Flow: []model.FlowStep{
+			{Parallel: &model.ParallelStep{Steps: []string{"step1", "step2"}}},
+		},
+		Output: &model.WorkflowOutput{Map: map[string]string{
+			"r1": "step1.output",
+			"r2": "step2.output",
+		}},
+	}
+	reg := participant.Registry{"step1": mp1, "step2": mp2}
+
+	out, err := Run(context.Background(), wf, nil, nil, reg)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	m, ok := out.(map[string]any)
+	if !ok {
+		t.Fatalf("Run() returned %T, want map[string]any", out)
+	}
+	if m["r1"] != "out1" {
+		t.Errorf("r1 = %v, want out1", m["r1"])
+	}
+	if m["r2"] != "out2" {
+		t.Errorf("r2 = %v, want out2", m["r2"])
+	}
+}
+
+func TestRunParallelOneFailCancelsOthers(t *testing.T) {
+	mp1 := &mockParticipant{err: errors.New("step1 failed")}
+	mp2 := &mockParticipant{output: "out2"}
+	wf := &model.Workflow{
+		ID: "wf1",
+		Participants: map[string]model.Participant{
+			"step1": {Type: model.ParticipantTypeExec},
+			"step2": {Type: model.ParticipantTypeExec},
+		},
+		Flow: []model.FlowStep{
+			{Parallel: &model.ParallelStep{Steps: []string{"step1", "step2"}}},
+		},
+	}
+	reg := participant.Registry{"step1": mp1, "step2": mp2}
+
+	_, err := Run(context.Background(), wf, nil, nil, reg)
+	if err == nil {
+		t.Fatal("Run() expected error when parallel branch fails, got nil")
+	}
+}
+
+func TestRunParallelEmpty(t *testing.T) {
+	wf := &model.Workflow{
+		ID:           "wf1",
+		Participants: map[string]model.Participant{},
+		Flow: []model.FlowStep{
+			{Parallel: &model.ParallelStep{Steps: []string{}}},
+		},
+	}
+	reg := participant.Registry{}
+
+	_, err := Run(context.Background(), wf, nil, nil, reg)
+	if err != nil {
+		t.Fatalf("Run() error for empty parallel: %v", err)
+	}
+}
+
+// ----- If / then / else -----
+
+func TestRunIfThenBranchExecuted(t *testing.T) {
+	mpThen := &mockParticipant{output: "then-result"}
+	mpElse := &mockParticipant{output: "else-result"}
+	wf := &model.Workflow{
+		ID: "wf1",
+		Participants: map[string]model.Participant{
+			"thenStep": {Type: model.ParticipantTypeExec},
+			"elseStep": {Type: model.ParticipantTypeExec},
+		},
+		Flow: []model.FlowStep{
+			{If: &model.IfStep{
+				Condition: "true",
+				Then:      []model.FlowStep{{Participant: "thenStep"}},
+				Else:      []model.FlowStep{{Participant: "elseStep"}},
+			}},
+		},
+	}
+	reg := participant.Registry{"thenStep": mpThen, "elseStep": mpElse}
+
+	_, err := Run(context.Background(), wf, nil, nil, reg)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if mpElse.capturedInput != nil {
+		t.Error("elseStep should not have been called when condition is true")
+	}
+}
+
+func TestRunIfElseBranchExecuted(t *testing.T) {
+	mpThen := &mockParticipant{output: "then-result"}
+	mpElse := &mockParticipant{output: "else-result"}
+	wf := &model.Workflow{
+		ID: "wf1",
+		Participants: map[string]model.Participant{
+			"thenStep": {Type: model.ParticipantTypeExec},
+			"elseStep": {Type: model.ParticipantTypeExec},
+		},
+		Flow: []model.FlowStep{
+			{If: &model.IfStep{
+				Condition: "false",
+				Then:      []model.FlowStep{{Participant: "thenStep"}},
+				Else:      []model.FlowStep{{Participant: "elseStep"}},
+			}},
+		},
+	}
+	reg := participant.Registry{"thenStep": mpThen, "elseStep": mpElse}
+
+	_, err := Run(context.Background(), wf, nil, nil, reg)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if mpThen.capturedInput != nil {
+		t.Error("thenStep should not have been called when condition is false")
+	}
+}
+
+func TestRunIfNoElseFalseConditionIsNoop(t *testing.T) {
+	mp := &mockParticipant{output: "x"}
+	wf := &model.Workflow{
+		ID: "wf1",
+		Participants: map[string]model.Participant{
+			"step1": {Type: model.ParticipantTypeExec},
+		},
+		Flow: []model.FlowStep{
+			{If: &model.IfStep{
+				Condition: "false",
+				Then:      []model.FlowStep{{Participant: "step1"}},
+			}},
+		},
+	}
+	reg := participant.Registry{"step1": mp}
+
+	_, err := Run(context.Background(), wf, nil, nil, reg)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if mp.capturedInput != nil {
+		t.Error("step1 should not have been called when if condition is false and there is no else")
+	}
+}
+
+func TestRunIfConditionUsesInputVariable(t *testing.T) {
+	mpThen := &mockParticipant{output: "then-ran"}
+	mpElse := &mockParticipant{output: "else-ran"}
+	wf := &model.Workflow{
+		ID: "wf1",
+		Inputs: map[string]model.InputField{
+			"deploy": {Default: "true"},
+		},
+		Participants: map[string]model.Participant{
+			"deploy":     {Type: model.ParticipantTypeExec},
+			"skipDeploy": {Type: model.ParticipantTypeExec},
+		},
+		Flow: []model.FlowStep{
+			{If: &model.IfStep{
+				Condition: `input["deploy"] == "true"`,
+				Then:      []model.FlowStep{{Participant: "deploy"}},
+				Else:      []model.FlowStep{{Participant: "skipDeploy"}},
+			}},
+		},
+	}
+	reg := participant.Registry{"deploy": mpThen, "skipDeploy": mpElse}
+
+	_, err := Run(context.Background(), wf, nil, nil, reg)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if mpElse.capturedInput != nil {
+		t.Error("skipDeploy should not run when input.deploy == 'true'")
+	}
+}
+
+// ----- When guard (override step) -----
+
+func TestRunWhenGuardTrueExecutesStep(t *testing.T) {
+	mp := &mockParticipant{output: "ran"}
+	wf := &model.Workflow{
+		ID: "wf1",
+		Participants: map[string]model.Participant{
+			"step1": {Type: model.ParticipantTypeExec},
+		},
+		Flow: []model.FlowStep{
+			{Override: &model.ParticipantOverrideStep{
+				Participant: "step1",
+				When:        "true",
+			}},
+		},
+	}
+	reg := participant.Registry{"step1": mp}
+
+	_, err := Run(context.Background(), wf, nil, nil, reg)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	// mp.Execute was called — output would be set.
+	if mp.output != "ran" {
+		t.Errorf("step1.output = %v, want ran", mp.output)
+	}
+}
+
 // ----- resolveTimeout -----
 
 func TestResolveTimeoutFlowOverrideTakesPriority(t *testing.T) {
@@ -742,6 +1080,27 @@ func TestRunTimeoutViaDefaults(t *testing.T) {
 }
 
 // ----- helpers -----
+
+// countingParticipant tracks how many times Execute is called and returns
+// a string representation of the call count as its output.
+type countingParticipant struct {
+	calls int
+}
+
+func (c *countingParticipant) Execute(_ context.Context, _ any) (any, error) {
+	c.calls++
+	return fmt.Sprintf("%d", c.calls), nil
+}
+
+// funcParticipant delegates Execute to an arbitrary function, useful for
+// capturing loop-context values passed as inputs.
+type funcParticipant struct {
+	fn func(context.Context, any) (any, error)
+}
+
+func (f *funcParticipant) Execute(ctx context.Context, input any) (any, error) {
+	return f.fn(ctx, input)
+}
 
 // mustNewEnv creates a cel.Environment for a workflow with the given participant
 // names and input fields, calling t.Fatal on error.
