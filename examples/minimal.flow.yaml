@@ -1,0 +1,11 @@
+id: minimal
+name: Minimal Workflow
+version: "1"
+
+participants:
+  greet:
+    type: exec
+    run: echo "Hello, duckflux!"
+
+flow:
+  - greet

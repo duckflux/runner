@@ -1,0 +1,30 @@
+id: parallel-example
+name: Parallel Workflow
+version: "1"
+
+participants:
+  lint:
+    type: exec
+    run: echo "linting..."
+    timeout: 30s
+
+  test:
+    type: exec
+    run: echo "testing..."
+    timeout: 30s
+
+  build:
+    type: exec
+    run: echo "building..."
+    timeout: 30s
+
+  report:
+    type: exec
+    run: echo "all checks done"
+
+flow:
+  - parallel:
+      - lint
+      - test
+      - build
+  - report
