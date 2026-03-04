@@ -3,6 +3,9 @@ package parser
 import (
 	"fmt"
 	"strings"
+
+	"github.com/duckflux/runner/internal/cel"
+	"github.com/duckflux/runner/internal/model"
 )
 
 // ValidationError represents a single structured validation failure returned by
@@ -43,4 +46,157 @@ func (ve ValidationErrors) Error() string {
 		msgs[i] = e.Error()
 	}
 	return strings.Join(msgs, "\n")
+}
+
+// ValidateSemantic performs post-parse semantic validation on a workflow:
+//   - participant names must not be reserved identifiers
+//   - flow step references must exist in the participants map
+//   - onError redirect targets must exist in the participants map
+//   - loop steps must specify at least one of until or max > 0
+//   - all CEL expressions must compile successfully
+//
+// celEnv must be a CEL environment built from the same workflow so that
+// participant variables are declared when expressions are type-checked.
+// If there are no errors the returned slice is nil.
+func ValidateSemantic(wf *model.Workflow, celEnv *cel.Environment) ValidationErrors {
+	var errs ValidationErrors
+
+	// 1. Reserved name check.
+	for name := range wf.Participants {
+		if model.IsReservedName(name) {
+			errs = append(errs, &ValidationError{
+				Field:   fmt.Sprintf("/participants/%s", name),
+				Message: fmt.Sprintf("participant name %q is reserved", name),
+			})
+		}
+	}
+
+	// 2. Flow step cross-references and CEL expression compilation.
+	validateFlowSteps(wf.Flow, wf.Participants, celEnv, "flow", &errs)
+
+	// 3. Participant-level onError redirect targets.
+	for name, p := range wf.Participants {
+		validateOnError(p.OnError, wf.Participants, fmt.Sprintf("/participants/%s/onError", name), &errs)
+		validateParticipantCEL(p, name, celEnv, &errs)
+	}
+
+	// 4. Defaults onError redirect target.
+	if wf.Defaults != nil {
+		validateOnError(wf.Defaults.OnError, wf.Participants, "/defaults/onError", &errs)
+	}
+
+	// 5. Workflow output CEL expressions.
+	if wf.Output != nil {
+		if wf.Output.Expression != "" {
+			compileCEL(celEnv, wf.Output.Expression, "/output", &errs)
+		}
+		for field, expr := range wf.Output.Map {
+			compileCEL(celEnv, expr, fmt.Sprintf("/output/%s", field), &errs)
+		}
+	}
+
+	if len(errs) == 0 {
+		return nil
+	}
+	return errs
+}
+
+// validateFlowSteps recursively validates a slice of flow steps.
+func validateFlowSteps(steps []model.FlowStep, participants map[string]model.Participant, celEnv *cel.Environment, path string, errs *ValidationErrors) {
+	for i, step := range steps {
+		stepPath := fmt.Sprintf("%s[%d]", path, i)
+		switch {
+		case step.Participant != "":
+			if _, ok := participants[step.Participant]; !ok {
+				*errs = append(*errs, &ValidationError{
+					Field:   stepPath,
+					Message: fmt.Sprintf("participant %q referenced in flow does not exist", step.Participant),
+				})
+			}
+
+		case step.Override != nil:
+			name := step.Override.Participant
+			if _, ok := participants[name]; !ok {
+				*errs = append(*errs, &ValidationError{
+					Field:   stepPath,
+					Message: fmt.Sprintf("participant %q referenced in flow does not exist", name),
+				})
+			}
+			validateOnError(step.Override.OnError, participants, stepPath+".onError", errs)
+			if step.Override.When != "" {
+				compileCEL(celEnv, step.Override.When, stepPath+".when", errs)
+			}
+
+		case step.Loop != nil:
+			loop := step.Loop
+			if loop.Until == "" && loop.Max == 0 {
+				*errs = append(*errs, &ValidationError{
+					Field:   stepPath + ".loop",
+					Message: "loop must specify at least one of 'until' or 'max'",
+				})
+			}
+			if loop.Until != "" {
+				compileCEL(celEnv, loop.Until, stepPath+".loop.until", errs)
+			}
+			validateFlowSteps(loop.Steps, participants, celEnv, stepPath+".loop.steps", errs)
+
+		case step.Parallel != nil:
+			for j, name := range step.Parallel.Steps {
+				if _, ok := participants[name]; !ok {
+					*errs = append(*errs, &ValidationError{
+						Field:   fmt.Sprintf("%s.parallel[%d]", stepPath, j),
+						Message: fmt.Sprintf("participant %q referenced in parallel does not exist", name),
+					})
+				}
+			}
+
+		case step.If != nil:
+			ifStep := step.If
+			if ifStep.Condition != "" {
+				compileCEL(celEnv, ifStep.Condition, stepPath+".if", errs)
+			}
+			validateFlowSteps(ifStep.Then, participants, celEnv, stepPath+".then", errs)
+			validateFlowSteps(ifStep.Else, participants, celEnv, stepPath+".else", errs)
+		}
+	}
+}
+
+// validateOnError checks that an onError value, if it is a redirect (not a
+// built-in action), names an existing participant.
+func validateOnError(onError string, participants map[string]model.Participant, path string, errs *ValidationErrors) {
+	switch onError {
+	case "", "fail", "skip", "retry":
+		// built-in actions — always valid
+	default:
+		if _, ok := participants[onError]; !ok {
+			*errs = append(*errs, &ValidationError{
+				Field:   path,
+				Message: fmt.Sprintf("onError redirect target %q is not a known participant", onError),
+			})
+		}
+	}
+}
+
+// validateParticipantCEL compiles CEL expressions embedded in a participant definition.
+func validateParticipantCEL(p model.Participant, name string, celEnv *cel.Environment, errs *ValidationErrors) {
+	base := fmt.Sprintf("/participants/%s", name)
+	// input map values may be CEL expressions
+	if inputMap, ok := p.Input.(map[string]interface{}); ok {
+		for field, val := range inputMap {
+			if expr, ok := val.(string); ok {
+				compileCEL(celEnv, expr, fmt.Sprintf("%s/input/%s", base, field), errs)
+			}
+		}
+	}
+}
+
+// compileCEL attempts to compile a CEL expression and appends any error to errs.
+func compileCEL(celEnv *cel.Environment, expr string, path string, errs *ValidationErrors) {
+	if _, err := celEnv.Compile(expr); err != nil {
+		*errs = append(*errs, &ValidationError{
+			Field:   path,
+			Message: fmt.Sprintf("invalid CEL expression: %s", err),
+			cause:   err,
+		})
+	}
 }
