@@ -1,5 +1,7 @@
 package cel
 
+import "sync"
+
 // WorkflowMeta holds workflow metadata available under the "workflow" variable.
 type WorkflowMeta struct {
 	ID      string
@@ -36,6 +38,8 @@ type LoopContext struct {
 }
 
 // State holds all runtime variable data used to evaluate CEL expressions.
+// The mu field protects concurrent reads and writes to Steps during parallel
+// step execution.
 type State struct {
 	Workflow  WorkflowMeta
 	Execution ExecutionMeta
@@ -43,4 +47,13 @@ type State struct {
 	Env       map[string]string
 	Steps     map[string]*StepResult
 	Loop      *LoopContext
+	mu        sync.RWMutex
+}
+
+// SetStep stores a step result thread-safely. It is the only permitted way to
+// write to Steps so that parallel goroutines do not race on the map.
+func (s *State) SetStep(name string, result *StepResult) {
+	s.mu.Lock()
+	s.Steps[name] = result
+	s.mu.Unlock()
 }
