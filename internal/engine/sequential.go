@@ -11,6 +11,17 @@ import (
 	"github.com/duckflux/runner/internal/participant"
 )
 
+// withStepTimeout derives a child context that is cancelled after the resolved
+// timeout duration. It returns the child context and a cancel function that must
+// be called to release resources. If there is no effective timeout, the parent
+// context is returned unchanged along with a no-op cancel function.
+func withStepTimeout(ctx context.Context, def model.Participant, override *model.ParticipantOverrideStep, wf *model.Workflow) (context.Context, context.CancelFunc) {
+	if d := resolveTimeout(def, override, wf); d != nil {
+		return context.WithTimeout(ctx, d.Duration)
+	}
+	return ctx, func() {}
+}
+
 // runSequential iterates over a slice of flow steps, executing each in order.
 // It returns the name of the last participant step that was executed (not skipped),
 // which is used to derive the implicit workflow output when no explicit output is
@@ -102,8 +113,12 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 		return fmt.Errorf("participant %q: evaluating input: %w", name, err)
 	}
 
+	// Apply timeout: derive a child context with the resolved deadline, if any.
+	stepCtx, cancel := withStepTimeout(ctx, def, override, wf)
+	defer cancel()
+
 	// Execute the participant.
-	out, execErr := p.Execute(ctx, input)
+	out, execErr := p.Execute(stepCtx, input)
 	if execErr != nil {
 		onErr := resolveOnError(def, override, wf)
 		switch onErr {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/duckflux/runner/internal/cel"
 	"github.com/duckflux/runner/internal/model"
@@ -21,6 +22,18 @@ type mockParticipant struct {
 func (m *mockParticipant) Execute(_ context.Context, input any) (any, error) {
 	m.capturedInput = input
 	return m.output, m.err
+}
+
+// blockingParticipant blocks until its context is cancelled, then returns the
+// context's error. Used to test timeout enforcement.
+type blockingParticipant struct {
+	capturedCtx context.Context
+}
+
+func (b *blockingParticipant) Execute(ctx context.Context, _ any) (any, error) {
+	b.capturedCtx = ctx
+	<-ctx.Done()
+	return nil, ctx.Err()
 }
 
 // ----- NewState -----
@@ -570,6 +583,161 @@ func TestRunEnvVariablePassedToState(t *testing.T) {
 	_, err := Run(context.Background(), wf, nil, map[string]string{"TOKEN": "secret"}, reg)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
+	}
+}
+
+// ----- resolveTimeout -----
+
+func TestResolveTimeoutFlowOverrideTakesPriority(t *testing.T) {
+	overrideDur := &model.Duration{Duration: 5 * time.Second}
+	participantDur := &model.Duration{Duration: 30 * time.Second}
+	defaultsDur := &model.Duration{Duration: 60 * time.Second}
+
+	def := model.Participant{Timeout: participantDur}
+	override := &model.ParticipantOverrideStep{Timeout: overrideDur}
+	wf := &model.Workflow{Defaults: &model.Defaults{Timeout: defaultsDur}}
+
+	got := resolveTimeout(def, override, wf)
+	if got != overrideDur {
+		t.Errorf("resolveTimeout = %v, want flow override %v", got, overrideDur)
+	}
+}
+
+func TestResolveTimeoutParticipantOverDefaults(t *testing.T) {
+	participantDur := &model.Duration{Duration: 30 * time.Second}
+	defaultsDur := &model.Duration{Duration: 60 * time.Second}
+
+	def := model.Participant{Timeout: participantDur}
+	wf := &model.Workflow{Defaults: &model.Defaults{Timeout: defaultsDur}}
+
+	got := resolveTimeout(def, nil, wf)
+	if got != participantDur {
+		t.Errorf("resolveTimeout = %v, want participant %v", got, participantDur)
+	}
+}
+
+func TestResolveTimeoutDefaultsWhenNoOtherSet(t *testing.T) {
+	defaultsDur := &model.Duration{Duration: 60 * time.Second}
+
+	def := model.Participant{}
+	wf := &model.Workflow{Defaults: &model.Defaults{Timeout: defaultsDur}}
+
+	got := resolveTimeout(def, nil, wf)
+	if got != defaultsDur {
+		t.Errorf("resolveTimeout = %v, want defaults %v", got, defaultsDur)
+	}
+}
+
+func TestResolveTimeoutNilWhenNoneSet(t *testing.T) {
+	def := model.Participant{}
+	wf := &model.Workflow{}
+
+	got := resolveTimeout(def, nil, wf)
+	if got != nil {
+		t.Errorf("resolveTimeout = %v, want nil", got)
+	}
+}
+
+func TestResolveTimeoutOverrideNilTimeoutFallsThrough(t *testing.T) {
+	participantDur := &model.Duration{Duration: 10 * time.Second}
+	def := model.Participant{Timeout: participantDur}
+	// override present but with no timeout set
+	override := &model.ParticipantOverrideStep{Timeout: nil}
+	wf := &model.Workflow{}
+
+	got := resolveTimeout(def, override, wf)
+	if got != participantDur {
+		t.Errorf("resolveTimeout = %v, want participant %v", got, participantDur)
+	}
+}
+
+// ----- timeout integration -----
+
+func TestRunTimeoutCausesStepFailure(t *testing.T) {
+	bp := &blockingParticipant{}
+	shortTimeout := &model.Duration{Duration: 10 * time.Millisecond}
+	wf := &model.Workflow{
+		ID: "wf-timeout",
+		Participants: map[string]model.Participant{
+			"step1": {Type: model.ParticipantTypeExec, Timeout: shortTimeout},
+		},
+		Flow: []model.FlowStep{{Participant: "step1"}},
+	}
+	reg := participant.Registry{"step1": bp}
+
+	_, err := Run(context.Background(), wf, nil, nil, reg)
+	if err == nil {
+		t.Fatal("Run() expected error due to timeout, got nil")
+	}
+}
+
+func TestRunTimeoutWithOnErrorSkipContinues(t *testing.T) {
+	bp := &blockingParticipant{}
+	mp2 := &mockParticipant{output: "step2-result"}
+	shortTimeout := &model.Duration{Duration: 10 * time.Millisecond}
+	wf := &model.Workflow{
+		ID: "wf-timeout-skip",
+		Participants: map[string]model.Participant{
+			"step1": {Type: model.ParticipantTypeExec, Timeout: shortTimeout, OnError: "skip"},
+			"step2": {Type: model.ParticipantTypeExec},
+		},
+		Flow: []model.FlowStep{
+			{Participant: "step1"},
+			{Participant: "step2"},
+		},
+	}
+	reg := participant.Registry{"step1": bp, "step2": mp2}
+
+	out, err := Run(context.Background(), wf, nil, nil, reg)
+	if err != nil {
+		t.Fatalf("Run() expected no error with onError=skip, got: %v", err)
+	}
+	if out != "step2-result" {
+		t.Errorf("Run() = %v, want step2-result", out)
+	}
+}
+
+func TestRunTimeoutViaFlowOverride(t *testing.T) {
+	bp := &blockingParticipant{}
+	shortTimeout := &model.Duration{Duration: 10 * time.Millisecond}
+	wf := &model.Workflow{
+		ID: "wf-override-timeout",
+		Participants: map[string]model.Participant{
+			"step1": {Type: model.ParticipantTypeExec},
+		},
+		Flow: []model.FlowStep{
+			{
+				Override: &model.ParticipantOverrideStep{
+					Participant: "step1",
+					Timeout:     shortTimeout,
+				},
+			},
+		},
+	}
+	reg := participant.Registry{"step1": bp}
+
+	_, err := Run(context.Background(), wf, nil, nil, reg)
+	if err == nil {
+		t.Fatal("Run() expected error due to flow-override timeout, got nil")
+	}
+}
+
+func TestRunTimeoutViaDefaults(t *testing.T) {
+	bp := &blockingParticipant{}
+	shortTimeout := &model.Duration{Duration: 10 * time.Millisecond}
+	wf := &model.Workflow{
+		ID:       "wf-defaults-timeout",
+		Defaults: &model.Defaults{Timeout: shortTimeout},
+		Participants: map[string]model.Participant{
+			"step1": {Type: model.ParticipantTypeExec},
+		},
+		Flow: []model.FlowStep{{Participant: "step1"}},
+	}
+	reg := participant.Registry{"step1": bp}
+
+	_, err := Run(context.Background(), wf, nil, nil, reg)
+	if err == nil {
+		t.Fatal("Run() expected error due to defaults timeout, got nil")
 	}
 }
 
