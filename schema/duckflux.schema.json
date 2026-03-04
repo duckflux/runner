@@ -55,7 +55,7 @@
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["exec", "http", "human", "workflow", "agent", "mcp"]
+          "enum": ["exec", "http", "human", "workflow", "agent", "mcp", "hook"]
         },
         "timeout": {
           "type": "string"

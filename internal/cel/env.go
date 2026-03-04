@@ -87,9 +87,13 @@ func (e *Environment) Bindings(s *State) map[string]any {
 	for _, name := range e.participants {
 		if result, ok := s.Steps[name]; ok {
 			vars[name] = map[string]any{
-				"output":  result.Output,
-				"status":  result.Status,
-				"retries": result.Retries,
+				"output":     result.Output,
+				"status":     result.Status,
+				"retries":    result.Retries,
+				"startedAt":  result.StartedAt,
+				"finishedAt": result.FinishedAt,
+				"duration":   result.Duration,
+				"error":      result.Error,
 			}
 		} else {
 			vars[name] = map[string]any{}

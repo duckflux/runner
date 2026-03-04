@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -217,12 +218,17 @@ func runWorkflow(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("resolving inputs: %w", err)
 	}
 
+	// ── 2a. Validate inputs against the workflow's declared schema ───────────
+	if errs := parser.ValidateInputs(wf, inputs); errs != nil {
+		return errs
+	}
+
 	// ── 3. Collect process environment ──────────────────────────────────────
 	env := collectEnv()
 
 	// ── 4. Build participant registry ────────────────────────────────────────
 	slog.Debug("building participant registry")
-	runnerFn := makeSubWorkflowRunner()
+	runnerFn := makeSubWorkflowRunner(filepath.Dir(filePath))
 	reg, err := participant.BuildRegistry(wf, env, runnerFn)
 	if err != nil {
 		return fmt.Errorf("building participant registry: %w", err)
@@ -317,9 +323,18 @@ func collectEnv() map[string]string {
 // WorkflowParticipant. It wires parser.Parse → participant.BuildRegistry →
 // engine.Run for recursive sub-workflow execution, breaking the
 // participant → engine import cycle by living in the cmd layer.
-func makeSubWorkflowRunner() participant.SubWorkflowRunnerFunc {
+// callerDir is the directory of the workflow that contains the sub-workflow
+// reference; relative paths are resolved against it.
+func makeSubWorkflowRunner(callerDir string) participant.SubWorkflowRunnerFunc {
 	var fn participant.SubWorkflowRunnerFunc
 	fn = func(ctx context.Context, path string, inputs map[string]any, env map[string]string) (any, error) {
+		// Resolve the path relative to the calling workflow's directory when it
+		// is not an absolute path, so that sub-workflows can be co-located with
+		// their parent regardless of the process working directory.
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(callerDir, path)
+		}
+
 		f, err := os.Open(path)
 		if err != nil {
 			return nil, fmt.Errorf("opening sub-workflow %q: %w", path, err)
@@ -331,7 +346,10 @@ func makeSubWorkflowRunner() participant.SubWorkflowRunnerFunc {
 			return nil, fmt.Errorf("parsing sub-workflow %q: %w", path, err)
 		}
 
-		reg, err := participant.BuildRegistry(wf, env, fn)
+		// Build the nested runner using the sub-workflow's own directory so that
+		// any further nesting resolves paths correctly.
+		subRunnerFn := makeSubWorkflowRunner(filepath.Dir(path))
+		reg, err := participant.BuildRegistry(wf, env, subRunnerFn)
 		if err != nil {
 			return nil, fmt.Errorf("building registry for sub-workflow %q: %w", path, err)
 		}

@@ -449,3 +449,92 @@ flow:
 		t.Errorf("expected ValidationErrors, got %T: %v", err, err)
 	}
 }
+
+// ----- CEL validation for participant input (Gap 1) -----
+
+func TestValidateSemanticInvalidCELParticipantInputString(t *testing.T) {
+	wf := &model.Workflow{
+		ID: "test",
+		Participants: map[string]model.Participant{
+			"stepA": {
+				Type:  model.ParticipantTypeExec,
+				Input: "!!!bad{{",
+			},
+		},
+		Flow: []model.FlowStep{{Participant: "stepA"}},
+	}
+	env := newCELEnv(t, wf)
+	errs := ValidateSemantic(wf, env)
+	if errs == nil {
+		t.Fatal("expected error for invalid CEL in participant input, got nil")
+	}
+	if !strings.Contains(errs.Error(), "invalid CEL expression") {
+		t.Errorf("expected 'invalid CEL expression', got: %v", errs)
+	}
+}
+
+func TestValidateSemanticInvalidCELParticipantInputNestedMap(t *testing.T) {
+	wf := &model.Workflow{
+		ID: "test",
+		Participants: map[string]model.Participant{
+			"stepA": {
+				Type: model.ParticipantTypeExec,
+				Input: map[string]interface{}{
+					"nested": map[string]interface{}{
+						"deep": "!!!bad{{",
+					},
+				},
+			},
+		},
+		Flow: []model.FlowStep{{Participant: "stepA"}},
+	}
+	env := newCELEnv(t, wf)
+	errs := ValidateSemantic(wf, env)
+	if errs == nil {
+		t.Fatal("expected error for invalid CEL in nested participant input map, got nil")
+	}
+	if !strings.Contains(errs.Error(), "invalid CEL expression") {
+		t.Errorf("expected 'invalid CEL expression', got: %v", errs)
+	}
+}
+
+func TestValidateSemanticInvalidCELOverrideInput(t *testing.T) {
+	wf := &model.Workflow{
+		ID: "test",
+		Participants: map[string]model.Participant{
+			"stepA": {Type: model.ParticipantTypeExec},
+		},
+		Flow: []model.FlowStep{
+			{Override: &model.ParticipantOverrideStep{
+				Participant: "stepA",
+				Input:       "!!!bad{{",
+			}},
+		},
+	}
+	env := newCELEnv(t, wf)
+	errs := ValidateSemantic(wf, env)
+	if errs == nil {
+		t.Fatal("expected error for invalid CEL in override input, got nil")
+	}
+	if !strings.Contains(errs.Error(), "invalid CEL expression") {
+		t.Errorf("expected 'invalid CEL expression', got: %v", errs)
+	}
+}
+
+func TestValidateSemanticValidCELParticipantInput(t *testing.T) {
+	wf := &model.Workflow{
+		ID: "test",
+		Participants: map[string]model.Participant{
+			"stepA": {
+				Type:  model.ParticipantTypeExec,
+				Input: `input["branch"]`,
+			},
+		},
+		Flow: []model.FlowStep{{Participant: "stepA"}},
+	}
+	env := newCELEnv(t, wf)
+	errs := ValidateSemantic(wf, env)
+	if errs != nil {
+		t.Errorf("valid CEL participant input should pass, got: %v", errs)
+	}
+}

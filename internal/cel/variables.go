@@ -21,9 +21,13 @@ type ExecutionMeta struct {
 // StepResult holds the result of a completed participant step.
 // It is available in expressions as "<participant-name>.output", "<participant-name>.status", etc.
 type StepResult struct {
-	Output  any
-	Status  string
-	Retries int64
+	Output     any
+	Status     string
+	Retries    int64
+	StartedAt  string
+	FinishedAt string
+	Duration   string
+	Error      string
 }
 
 // LoopContext holds loop iteration variables available as "loop.*" inside a loop body

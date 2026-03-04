@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -1200,4 +1201,156 @@ func mustNewEnv(t *testing.T, participants []string, inputs map[string]model.Inp
 		t.Fatalf("cel.NewEnv error: %v", err)
 	}
 	return env
+}
+
+// ----- Non-boolean condition errors (Gap 2) -----
+
+func TestRunIfNonBoolConditionErrors(t *testing.T) {
+	mp := &mockParticipant{output: "x"}
+	wf := &model.Workflow{
+		ID: "wf1",
+		Participants: map[string]model.Participant{
+			"step1": {Type: model.ParticipantTypeExec},
+		},
+		// "workflow.id" evaluates to a string, not a bool.
+		Flow: []model.FlowStep{
+			{If: &model.IfStep{
+				Condition: "workflow.id",
+				Then:      []model.FlowStep{{Participant: "step1"}},
+			}},
+		},
+	}
+	reg := participant.Registry{"step1": mp}
+
+	_, err := Run(context.Background(), wf, nil, nil, reg)
+	if err == nil {
+		t.Fatal("Run() expected error for non-bool if condition, got nil")
+	}
+	if !strings.Contains(err.Error(), "bool") {
+		t.Errorf("error should mention 'bool', got: %v", err)
+	}
+}
+
+func TestRunWhenNonBoolErrors(t *testing.T) {
+	mp := &mockParticipant{output: "x"}
+	wf := &model.Workflow{
+		ID: "wf1",
+		Participants: map[string]model.Participant{
+			"step1": {Type: model.ParticipantTypeExec},
+		},
+		// "workflow.id" evaluates to a string, not a bool.
+		Flow: []model.FlowStep{
+			{Override: &model.ParticipantOverrideStep{
+				Participant: "step1",
+				When:        "workflow.id",
+			}},
+		},
+	}
+	reg := participant.Registry{"step1": mp}
+
+	_, err := Run(context.Background(), wf, nil, nil, reg)
+	if err == nil {
+		t.Fatal("Run() expected error for non-bool when guard, got nil")
+	}
+	if !strings.Contains(err.Error(), "bool") {
+		t.Errorf("error should mention 'bool', got: %v", err)
+	}
+}
+
+func TestRunLoopUntilNonBoolErrors(t *testing.T) {
+	mp := &mockParticipant{output: "x"}
+	wf := &model.Workflow{
+		ID: "wf1",
+		Participants: map[string]model.Participant{
+			"step1": {Type: model.ParticipantTypeExec},
+		},
+		// "workflow.id" evaluates to a string, not a bool.
+		Flow: []model.FlowStep{
+			{Loop: &model.LoopStep{
+				Until: "workflow.id",
+				Max:   5,
+				Steps: []model.FlowStep{{Participant: "step1"}},
+			}},
+		},
+	}
+	reg := participant.Registry{"step1": mp}
+
+	_, err := Run(context.Background(), wf, nil, nil, reg)
+	if err == nil {
+		t.Fatal("Run() expected error for non-bool loop.until, got nil")
+	}
+	if !strings.Contains(err.Error(), "bool") {
+		t.Errorf("error should mention 'bool', got: %v", err)
+	}
+}
+
+// ----- Step timing metadata (Gap 4) -----
+
+func TestRunStepResultHasTimingFields(t *testing.T) {
+	mp := &mockParticipant{output: "done"}
+	wf := &model.Workflow{
+		ID: "wf1",
+		Participants: map[string]model.Participant{
+			"step1": {Type: model.ParticipantTypeExec},
+		},
+		Flow: []model.FlowStep{{Participant: "step1"}},
+	}
+	reg := participant.Registry{"step1": mp}
+
+	state := NewState(wf, nil, nil)
+	celEnv, err := cel.NewEnv(wf)
+	if err != nil {
+		t.Fatalf("NewEnv: %v", err)
+	}
+	_, runErr := runSequential(context.Background(), wf, wf.Flow, state, celEnv, reg)
+	if runErr != nil {
+		t.Fatalf("runSequential: %v", runErr)
+	}
+
+	result, ok := state.Steps["step1"]
+	if !ok {
+		t.Fatal("step1 not found in state.Steps")
+	}
+	if result.StartedAt == "" {
+		t.Error("StepResult.StartedAt should be populated")
+	}
+	if result.FinishedAt == "" {
+		t.Error("StepResult.FinishedAt should be populated")
+	}
+	if result.Duration == "" {
+		t.Error("StepResult.Duration should be populated")
+	}
+}
+
+func TestRunStepResultHasErrorOnFailure(t *testing.T) {
+	mp := &mockParticipant{err: errors.New("boom")}
+	wf := &model.Workflow{
+		ID: "wf1",
+		Participants: map[string]model.Participant{
+			"step1": {Type: model.ParticipantTypeExec, OnError: "skip"},
+		},
+		Flow: []model.FlowStep{{Participant: "step1"}},
+	}
+	reg := participant.Registry{"step1": mp}
+
+	state := NewState(wf, nil, nil)
+	celEnv, err := cel.NewEnv(wf)
+	if err != nil {
+		t.Fatalf("NewEnv: %v", err)
+	}
+	_, runErr := runSequential(context.Background(), wf, wf.Flow, state, celEnv, reg)
+	if runErr != nil {
+		t.Fatalf("runSequential: %v", runErr)
+	}
+
+	result, ok := state.Steps["step1"]
+	if !ok {
+		t.Fatal("step1 not found in state.Steps")
+	}
+	if result.Error == "" {
+		t.Error("StepResult.Error should be populated on failure")
+	}
+	if result.StartedAt == "" {
+		t.Error("StepResult.StartedAt should be populated even on failure")
+	}
 }
