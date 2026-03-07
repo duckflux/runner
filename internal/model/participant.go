@@ -20,6 +20,7 @@ type Participant struct {
 	Timeout *Duration       `yaml:"timeout,omitempty"`
 	OnError string          `yaml:"onError,omitempty"`
 	Retry   *RetryConfig    `yaml:"retry,omitempty"`
+	CWD     string          `yaml:"cwd,omitempty"`
 	Input   interface{}     `yaml:"input,omitempty"`
 	Output  interface{}     `yaml:"output,omitempty"`
 

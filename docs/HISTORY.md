@@ -92,6 +92,30 @@ Development was planned in phases with explicit dependencies: Phase 0 (bootstrap
 
 ---
 
+### 16. CEL program cache + workflow precompilation for runtime reuse
+**PR:** local (March 2026) · **By:** @copilot  
+`cel.Environment` now caches compiled programs by rewritten expression (including `loop.` → `_loop.` translation). The engine precompiles all workflow CEL expressions at startup and runtime reuses the cached programs, reducing repeated compilation during step execution.
+
+---
+
+### 17. Dynamic HTTP field evaluation with CEL and literal fallback
+**PR:** local (March 2026) · **By:** @copilot  
+For `http` participants, `url`, `method`, `headers`, and `body` can now be resolved dynamically from CEL at runtime using the current state. To preserve backward compatibility with static workflows, string values that do not compile as CEL are treated as plain literals.
+
+---
+
+### 18. Workflow output accepts scalar CEL expression (string) or map
+**PR:** local (March 2026) · **By:** @copilot  
+The schema now matches the model behavior: `output` may be either a single CEL expression string (scalar output) or an object map of named CEL expressions. This removed a schema/model mismatch that previously rejected valid scalar `output` definitions during lint/parse.
+
+---
+
+### 19. Working directory support for `exec` with explicit precedence
+**PR:** local (March 2026) · **By:** @copilot  
+`cwd` support was added at three levels: CLI (`duckflux run --cwd`), workflow defaults (`defaults.cwd`), and participant (`exec.cwd`). The effective working directory follows the precedence: `participant.cwd` > `defaults.cwd` > `--cwd` > process cwd. `exec.cwd` and `defaults.cwd` support CEL expressions; relative paths are resolved against the selected base working directory; execution uses `cmd.Dir`.
+
+---
+
 ## Changelog (resolved issues)
 
 | Issue | Title |

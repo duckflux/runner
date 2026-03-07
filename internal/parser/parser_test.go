@@ -45,6 +45,7 @@ version: "1.0"
 defaults:
   timeout: 5m
   onError: fail
+  cwd: "./workspace"
 inputs:
   repoUrl:
     type: string
@@ -53,6 +54,7 @@ participants:
   coder:
     type: agent
     model: claude-sonnet-4
+    cwd: input["repoUrl"]
     timeout: 15m
     onError: retry
     retry:
@@ -88,10 +90,16 @@ output:
 	if wf.Defaults.Timeout.Duration != 5*time.Minute {
 		t.Errorf("Defaults.Timeout = %v, want 5m", wf.Defaults.Timeout.Duration)
 	}
+	if wf.Defaults.CWD != "./workspace" {
+		t.Errorf("Defaults.CWD = %q, want ./workspace", wf.Defaults.CWD)
+	}
 	if len(wf.Participants) != 2 {
 		t.Fatalf("Participants len = %d, want 2", len(wf.Participants))
 	}
 	coder := wf.Participants["coder"]
+	if coder.CWD != `input["repoUrl"]` {
+		t.Errorf("coder.CWD = %q, want input[\"repoUrl\"]", coder.CWD)
+	}
 	if coder.Retry == nil || coder.Retry.Max != 3 {
 		t.Errorf("coder.Retry.Max = %v, want 3", coder.Retry)
 	}

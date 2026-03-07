@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -129,10 +131,10 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 		return fmt.Errorf("participant %q: evaluating input: %w", name, err)
 	}
 
-	// Resolve runtime HTTP fields (url/method/headers/body) with optional CEL
-	// evaluation while keeping plain literals valid.
+	// Resolve runtime participant fields for types that support dynamic values.
 	execParticipant := p
-	if def.Type == model.ParticipantTypeHTTP {
+	switch def.Type {
+	case model.ParticipantTypeHTTP:
 		resolvedDef, err := resolveHTTPDefinition(def, state, celEnv)
 		if err != nil {
 			return fmt.Errorf("participant %q: resolving http fields: %w", name, err)
@@ -141,6 +143,14 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 			execParticipant = hp.WithDefinition(resolvedDef)
 		} else {
 			execParticipant = participant.NewHTTP(resolvedDef, nil)
+		}
+	case model.ParticipantTypeExec:
+		if ep, ok := p.(*participant.ExecParticipant); ok {
+			resolvedDef, err := resolveExecDefinition(ctx, def, wf, state, celEnv)
+			if err != nil {
+				return fmt.Errorf("participant %q: resolving exec fields: %w", name, err)
+			}
+			execParticipant = ep.WithDefinition(resolvedDef)
 		}
 	}
 
@@ -245,6 +255,58 @@ func resolveOnError(def model.Participant, override *model.ParticipantOverrideSt
 		return wf.Defaults.OnError
 	}
 	return "fail"
+}
+
+// resolveExecDefinition resolves the effective cwd for an exec participant
+// using precedence: participant.cwd > defaults.cwd > CLI --cwd > process cwd.
+// participant/defaults cwd values may be CEL expressions; non-CEL strings are
+// treated as literals.
+func resolveExecDefinition(ctx context.Context, def model.Participant, wf *model.Workflow, state *cel.State, env *cel.Environment) (model.Participant, error) {
+	base := baseCWDFromContext(ctx)
+	if base == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return model.Participant{}, fmt.Errorf("resolving current working directory: %w", err)
+		}
+		base = wd
+	}
+
+	resolved := def
+
+	// 1) participant.cwd
+	if def.CWD != "" {
+		cwd, err := evalMaybeCELString(def.CWD, state, env)
+		if err != nil {
+			return model.Participant{}, fmt.Errorf("participant.cwd: %w", err)
+		}
+		if cwd != "" {
+			resolved.CWD = toAbsoluteCWD(base, cwd)
+			return resolved, nil
+		}
+	}
+
+	// 2) defaults.cwd
+	if wf.Defaults != nil && wf.Defaults.CWD != "" {
+		cwd, err := evalMaybeCELString(wf.Defaults.CWD, state, env)
+		if err != nil {
+			return model.Participant{}, fmt.Errorf("defaults.cwd: %w", err)
+		}
+		if cwd != "" {
+			resolved.CWD = toAbsoluteCWD(base, cwd)
+			return resolved, nil
+		}
+	}
+
+	// 3) CLI --cwd (stored in context), 4) process cwd (already captured in base)
+	resolved.CWD = base
+	return resolved, nil
+}
+
+func toAbsoluteCWD(base string, cwd string) string {
+	if filepath.IsAbs(cwd) {
+		return cwd
+	}
+	return filepath.Join(base, cwd)
 }
 
 // resolveHTTPDefinition evaluates HTTP participant definition fields against

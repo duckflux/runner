@@ -8,20 +8,21 @@ import (
 
 // Workflow is the top-level structure of a duckflux workflow definition file.
 type Workflow struct {
-	ID           string                `yaml:"id"`
-	Name         string                `yaml:"name,omitempty"`
-	Version      string                `yaml:"version,omitempty"`
-	Defaults     *Defaults             `yaml:"defaults,omitempty"`
-	Inputs       map[string]InputField `yaml:"inputs,omitempty"`
+	ID           string                 `yaml:"id"`
+	Name         string                 `yaml:"name,omitempty"`
+	Version      string                 `yaml:"version,omitempty"`
+	Defaults     *Defaults              `yaml:"defaults,omitempty"`
+	Inputs       map[string]InputField  `yaml:"inputs,omitempty"`
 	Participants map[string]Participant `yaml:"participants"`
-	Flow         []FlowStep            `yaml:"flow"`
-	Output       *WorkflowOutput       `yaml:"output,omitempty"`
+	Flow         []FlowStep             `yaml:"flow"`
+	Output       *WorkflowOutput        `yaml:"output,omitempty"`
 }
 
 // Defaults holds global defaults applied to all participants when not overridden.
 type Defaults struct {
 	Timeout *Duration `yaml:"timeout,omitempty"`
 	OnError string    `yaml:"onError,omitempty"`
+	CWD     string    `yaml:"cwd,omitempty"`
 }
 
 // InputField describes a single workflow input parameter.

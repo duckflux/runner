@@ -13,6 +13,9 @@ func (e *Environment) PrecompileWorkflow(wf *model.Workflow) error {
 		if err := precompileInputStrict(e, p.Input, fmt.Sprintf("/participants/%s/input", name)); err != nil {
 			return err
 		}
+		if p.Type == model.ParticipantTypeExec {
+			precompileMaybeCELString(e, p.CWD)
+		}
 		if p.Type == model.ParticipantTypeHTTP {
 			base := fmt.Sprintf("/participants/%s", name)
 			precompileMaybeCELString(e, p.URL)
@@ -24,6 +27,10 @@ func (e *Environment) PrecompileWorkflow(wf *model.Workflow) error {
 				return err
 			}
 		}
+	}
+
+	if wf.Defaults != nil {
+		precompileMaybeCELString(e, wf.Defaults.CWD)
 	}
 
 	if err := precompileFlowSteps(e, wf.Flow, "flow"); err != nil {

@@ -68,6 +68,9 @@
         "onError": {
           "type": "string"
         },
+        "cwd": {
+          "type": "string"
+        },
         "retry": {
           "$ref": "#/definitions/RetryConfig"
         }
@@ -129,7 +132,8 @@
       "type": "object",
       "properties": {
         "timeout": {"type": "string"},
-        "onError": {"type": "string"}
+        "onError": {"type": "string"},
+        "cwd": {"type": "string"}
       }
     },
     "InputField": {

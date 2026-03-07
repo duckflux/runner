@@ -95,6 +95,7 @@ duckflux run <file.flow.yaml> [flags]
 |------|-------------|
 | `--input key=value` | Pass an input value (repeatable) |
 | `--input-file path.json` | Load inputs from a JSON file |
+| `--cwd path` | Base working directory for `exec` participants |
 | `--verbose` | Enable debug logging |
 | `--quiet` | Suppress all output except errors |
 
@@ -188,6 +189,11 @@ Configurable per participant or per flow step invocation (flow overrides partici
 ### Timeouts
 
 Resolution chain: **flow override > participant > defaults > none**.
+
+### Working Directory (`exec`)
+
+`exec` commands run with this precedence:
+**participant.cwd > defaults.cwd > --cwd > current process cwd**.
 
 ### Expressions
 

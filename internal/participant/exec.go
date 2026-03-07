@@ -19,6 +19,7 @@ import (
 // the current process environment.
 type ExecParticipant struct {
 	run      string   // shell command passed to sh -c
+	cwd      string   // working directory for command execution (cmd.Dir)
 	extraEnv []string // "KEY=VALUE" pairs appended to os.Environ()
 }
 
@@ -32,6 +33,19 @@ func NewExec(def model.Participant, extraEnv map[string]string) *ExecParticipant
 	}
 	return &ExecParticipant{
 		run:      def.Run,
+		cwd:      def.CWD,
+		extraEnv: extra,
+	}
+}
+
+// WithDefinition returns a copy configured from def while preserving the
+// environment injection from the receiver.
+func (e *ExecParticipant) WithDefinition(def model.Participant) *ExecParticipant {
+	extra := make([]string, len(e.extraEnv))
+	copy(extra, e.extraEnv)
+	return &ExecParticipant{
+		run:      def.Run,
+		cwd:      def.CWD,
 		extraEnv: extra,
 	}
 }
@@ -46,6 +60,9 @@ func (e *ExecParticipant) Execute(ctx context.Context, input any) (any, error) {
 	}
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", e.run)
+	if e.cwd != "" {
+		cmd.Dir = e.cwd
+	}
 
 	// WaitDelay bounds how long cmd.Wait() may block waiting for I/O goroutines
 	// to drain after the process has been killed (e.g. on context cancellation).

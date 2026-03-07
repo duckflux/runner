@@ -20,9 +20,14 @@ import (
 	"github.com/duckflux/runner/internal/participant"
 )
 
-// runWorkflow is a test helper that parses a YAML workflow string, builds the
-// participant registry with a no-op sub-workflow runner, and executes it.
+// runWorkflow is a convenience wrapper that executes with a background context.
 func runWorkflow(t *testing.T, yaml string, inputs map[string]any) (any, error) {
+	return runWorkflowWithContext(t, context.Background(), yaml, inputs)
+}
+
+// runWorkflowWithContext parses a YAML workflow string, builds the participant
+// registry, and executes it with the provided context.
+func runWorkflowWithContext(t *testing.T, ctx context.Context, yaml string, inputs map[string]any) (any, error) {
 	t.Helper()
 	wf, err := parser.Parse(strings.NewReader(yaml))
 	if err != nil {
@@ -56,7 +61,7 @@ func runWorkflow(t *testing.T, yaml string, inputs map[string]any) (any, error) 
 		return nil, fmt.Errorf("build registry: %w", err)
 	}
 
-	return engine.Run(context.Background(), wf, inputs, env, reg)
+	return engine.Run(ctx, wf, inputs, env, reg)
 }
 
 // runWorkflowFile parses a workflow from a file path and executes it.
@@ -78,6 +83,13 @@ func examplesDir(t *testing.T) string {
 		t.Fatalf("resolving examples dir: %v", err)
 	}
 	return dir
+}
+
+func canonicalPath(p string) string {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved
+	}
+	return p
 }
 
 // ── exec participant ─────────────────────────────────────────────────────────
@@ -230,6 +242,110 @@ flow:
 	_, err := runWorkflow(t, yaml, nil)
 	if err == nil {
 		t.Fatal("Run() expected error for failing step with onError=fail, got nil")
+	}
+}
+
+func TestExecCWDFromCLIBase(t *testing.T) {
+	baseDir := t.TempDir()
+	yaml := `
+id: exec-cwd-cli
+participants:
+  where:
+    type: exec
+    run: pwd
+flow:
+  - where
+`
+	ctx := engine.WithBaseCWD(context.Background(), baseDir)
+	out, err := runWorkflowWithContext(t, ctx, yaml, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	got, ok := out.(string)
+	if !ok {
+		t.Fatalf("output type = %T, want string", out)
+	}
+	gotPath := canonicalPath(strings.TrimSpace(got))
+	wantPath := canonicalPath(baseDir)
+	if gotPath != wantPath {
+		t.Errorf("pwd = %q, want %q", gotPath, wantPath)
+	}
+}
+
+func TestExecCWDDefaultsOverrideCLIBase(t *testing.T) {
+	baseDir := t.TempDir()
+	defaultsDir := t.TempDir()
+	yaml := fmt.Sprintf(`
+id: exec-cwd-defaults
+defaults:
+  cwd: %q
+participants:
+  where:
+    type: exec
+    run: pwd
+flow:
+  - where
+`, defaultsDir)
+	ctx := engine.WithBaseCWD(context.Background(), baseDir)
+	out, err := runWorkflowWithContext(t, ctx, yaml, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	got := strings.TrimSpace(out.(string))
+	if canonicalPath(got) != canonicalPath(defaultsDir) {
+		t.Errorf("pwd = %q, want defaults.cwd %q", canonicalPath(got), canonicalPath(defaultsDir))
+	}
+}
+
+func TestExecCWDParticipantOverrideDefaultsAndCLI(t *testing.T) {
+	baseDir := t.TempDir()
+	defaultsDir := t.TempDir()
+	participantDir := t.TempDir()
+	yaml := fmt.Sprintf(`
+id: exec-cwd-participant
+defaults:
+  cwd: %q
+participants:
+  where:
+    type: exec
+    run: pwd
+    cwd: %q
+flow:
+  - where
+`, defaultsDir, participantDir)
+	ctx := engine.WithBaseCWD(context.Background(), baseDir)
+	out, err := runWorkflowWithContext(t, ctx, yaml, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	got := strings.TrimSpace(out.(string))
+	if canonicalPath(got) != canonicalPath(participantDir) {
+		t.Errorf("pwd = %q, want participant.cwd %q", canonicalPath(got), canonicalPath(participantDir))
+	}
+}
+
+func TestExecCWDParticipantSupportsCELVariables(t *testing.T) {
+	cwdDir := t.TempDir()
+	yaml := `
+id: exec-cwd-cel
+inputs:
+  dir:
+    type: string
+participants:
+  where:
+    type: exec
+    run: pwd
+    cwd: input["dir"]
+flow:
+  - where
+`
+	out, err := runWorkflow(t, yaml, map[string]any{"dir": cwdDir})
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	got := strings.TrimSpace(out.(string))
+	if canonicalPath(got) != canonicalPath(cwdDir) {
+		t.Errorf("pwd = %q, want input dir %q", canonicalPath(got), canonicalPath(cwdDir))
 	}
 }
 

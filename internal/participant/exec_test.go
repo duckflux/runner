@@ -2,6 +2,7 @@ package participant
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -63,6 +64,30 @@ func TestExecPipesMapInputAsJSON(t *testing.T) {
 	}
 	if !strings.Contains(s, "key") || !strings.Contains(s, "value") {
 		t.Errorf("Execute() = %q, expected JSON with key and value", s)
+	}
+}
+
+func TestExecRunsInConfiguredCWD(t *testing.T) {
+	dir := t.TempDir()
+	p := NewExec(model.Participant{Run: "pwd", CWD: dir}, nil)
+	out, err := p.Execute(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Execute() error: %v", err)
+	}
+	got, ok := out.(string)
+	if !ok {
+		t.Fatalf("Execute() returned %T, want string", out)
+	}
+	gotPath := strings.TrimSpace(got)
+	if resolved, err := filepath.EvalSymlinks(gotPath); err == nil {
+		gotPath = resolved
+	}
+	wantPath := dir
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		wantPath = resolved
+	}
+	if gotPath != wantPath {
+		t.Errorf("Execute() pwd = %q, want %q", gotPath, wantPath)
 	}
 }
 

@@ -26,6 +26,7 @@ var logLevel = new(slog.LevelVar)
 var (
 	runInputs    []string
 	runInputFile string
+	runCWD       string
 )
 
 var rootCmd = &cobra.Command{
@@ -146,6 +147,7 @@ func init() {
 	// run-specific flags.
 	runCmd.Flags().StringArrayVar(&runInputs, "input", nil, "Input value as key=value (repeatable)")
 	runCmd.Flags().StringVar(&runInputFile, "input-file", "", "JSON file containing workflow inputs")
+	runCmd.Flags().StringVar(&runCWD, "cwd", "", "Base working directory for workflow execution")
 
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(lintCmd)
@@ -197,6 +199,15 @@ func main() {
 // runWorkflow implements the "run" subcommand.
 func runWorkflow(cmd *cobra.Command, args []string) error {
 	filePath := args[0]
+	runCtx := context.Background()
+
+	if runCWD != "" {
+		resolved, err := resolveRunCWD(runCWD)
+		if err != nil {
+			return err
+		}
+		runCtx = engine.WithBaseCWD(runCtx, resolved)
+	}
 
 	// ── 1. Parse and validate ────────────────────────────────────────────────
 	slog.Debug("parsing workflow", "file", filePath)
@@ -236,7 +247,7 @@ func runWorkflow(cmd *cobra.Command, args []string) error {
 
 	// ── 5. Execute ──────────────────────────────────────────────────────────
 	slog.Info("running workflow", "id", wf.ID)
-	out, err := engine.Run(context.Background(), wf, inputs, env, reg)
+	out, err := engine.Run(runCtx, wf, inputs, env, reg)
 	if err != nil {
 		return fmt.Errorf("workflow execution failed: %w", err)
 	}
@@ -244,6 +255,21 @@ func runWorkflow(cmd *cobra.Command, args []string) error {
 
 	// ── 6. Print output ──────────────────────────────────────────────────────
 	return printOutput(cmd, out)
+}
+
+func resolveRunCWD(raw string) (string, error) {
+	abs, err := filepath.Abs(raw)
+	if err != nil {
+		return "", fmt.Errorf("resolving --cwd %q: %w", raw, err)
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return "", fmt.Errorf("validating --cwd %q: %w", abs, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("validating --cwd %q: not a directory", abs)
+	}
+	return abs, nil
 }
 
 // resolveInputs merges inputs from stdin (JSON), --input-file, and --input flags.
