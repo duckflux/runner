@@ -106,6 +106,32 @@ output:
 	}
 }
 
+func TestParseOutputExpressionString(t *testing.T) {
+	src := `
+id: output-expression
+participants:
+  stepA:
+    type: exec
+    run: echo hello
+flow:
+  - stepA
+output: stepA.output
+`
+	wf, err := Parse(strings.NewReader(src))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if wf.Output == nil {
+		t.Fatal("Output should not be nil")
+	}
+	if wf.Output.Expression != "stepA.output" {
+		t.Errorf("Output.Expression = %q, want %q", wf.Output.Expression, "stepA.output")
+	}
+	if wf.Output.Map != nil {
+		t.Errorf("Output.Map = %v, want nil", wf.Output.Map)
+	}
+}
+
 // ----- Parse error cases -----
 
 func TestParseMissingID(t *testing.T) {

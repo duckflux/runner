@@ -129,6 +129,21 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 		return fmt.Errorf("participant %q: evaluating input: %w", name, err)
 	}
 
+	// Resolve runtime HTTP fields (url/method/headers/body) with optional CEL
+	// evaluation while keeping plain literals valid.
+	execParticipant := p
+	if def.Type == model.ParticipantTypeHTTP {
+		resolvedDef, err := resolveHTTPDefinition(def, state, celEnv)
+		if err != nil {
+			return fmt.Errorf("participant %q: resolving http fields: %w", name, err)
+		}
+		if hp, ok := p.(*participant.HTTPParticipant); ok {
+			execParticipant = hp.WithDefinition(resolvedDef)
+		} else {
+			execParticipant = participant.NewHTTP(resolvedDef, nil)
+		}
+	}
+
 	// Apply timeout: derive a child context with the resolved deadline, if any.
 	stepCtx, cancel := withStepTimeout(ctx, def, override, wf)
 	defer cancel()
@@ -145,7 +160,7 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 	startedAt := time.Now()
 	slog.Debug("step starting", "participant", name)
 	out, retries, execErr := executeWithRetry(stepCtx, func() (any, error) {
-		return p.Execute(stepCtx, input)
+		return execParticipant.Execute(stepCtx, input)
 	}, retryConfig)
 	finishedAt := time.Now()
 	elapsed := finishedAt.Sub(startedAt)
@@ -230,6 +245,105 @@ func resolveOnError(def model.Participant, override *model.ParticipantOverrideSt
 		return wf.Defaults.OnError
 	}
 	return "fail"
+}
+
+// resolveHTTPDefinition evaluates HTTP participant definition fields against
+// the current runtime state. Strings that are not valid CEL expressions are
+// preserved as literals.
+func resolveHTTPDefinition(def model.Participant, state *cel.State, env *cel.Environment) (model.Participant, error) {
+	resolved := def
+
+	url, err := evalMaybeCELString(def.URL, state, env)
+	if err != nil {
+		return model.Participant{}, fmt.Errorf("url: %w", err)
+	}
+	method, err := evalMaybeCELString(def.Method, state, env)
+	if err != nil {
+		return model.Participant{}, fmt.Errorf("method: %w", err)
+	}
+
+	resolved.URL = url
+	resolved.Method = method
+
+	if def.Headers != nil {
+		headers := make(map[string]string, len(def.Headers))
+		for k, v := range def.Headers {
+			evalV, err := evalMaybeCELString(v, state, env)
+			if err != nil {
+				return model.Participant{}, fmt.Errorf("headers.%s: %w", k, err)
+			}
+			headers[k] = evalV
+		}
+		resolved.Headers = headers
+	}
+
+	if def.Body != nil {
+		body, err := evalMaybeCEL(def.Body, state, env)
+		if err != nil {
+			return model.Participant{}, fmt.Errorf("body: %w", err)
+		}
+		resolved.Body = body
+	}
+
+	return resolved, nil
+}
+
+// evalMaybeCELString evaluates raw as CEL when possible; if raw does not
+// compile as CEL it is returned unchanged as a literal string.
+func evalMaybeCELString(raw string, state *cel.State, env *cel.Environment) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+
+	prog, err := env.Compile(raw)
+	if err != nil {
+		return raw, nil
+	}
+
+	out, err := env.Eval(prog, state)
+	if err != nil {
+		return "", err
+	}
+
+	if out == nil {
+		return "", nil
+	}
+	return fmt.Sprint(out), nil
+}
+
+// evalMaybeCEL recursively evaluates CEL expressions where possible; invalid
+// CEL strings are preserved as literals so static HTTP config remains valid.
+func evalMaybeCEL(raw interface{}, state *cel.State, env *cel.Environment) (any, error) {
+	switch v := raw.(type) {
+	case string:
+		prog, err := env.Compile(v)
+		if err != nil {
+			return v, nil
+		}
+		return env.Eval(prog, state)
+	case map[string]interface{}:
+		result := make(map[string]any, len(v))
+		for key, val := range v {
+			evaluated, err := evalMaybeCEL(val, state, env)
+			if err != nil {
+				return nil, fmt.Errorf("field %q: %w", key, err)
+			}
+			result[key] = evaluated
+		}
+		return result, nil
+	case []interface{}:
+		result := make([]any, len(v))
+		for i, item := range v {
+			evaluated, err := evalMaybeCEL(item, state, env)
+			if err != nil {
+				return nil, fmt.Errorf("index %d: %w", i, err)
+			}
+			result[i] = evaluated
+		}
+		return result, nil
+	default:
+		return raw, nil
+	}
 }
 
 // evalInput evaluates a participant input definition against the current state.

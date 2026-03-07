@@ -6,6 +6,7 @@ package integration
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -616,6 +617,74 @@ flow:
 	}
 }
 
+func TestHTTPDynamicFieldsFromCEL(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(
+			w,
+			`{"method":"%s","token":"%s","msg":"%v","literal":"%v"}`,
+			r.Method,
+			r.Header.Get("X-Token"),
+			body["msg"],
+			body["literal"],
+		)
+	}))
+	defer ts.Close()
+
+	yaml := `
+id: http-dynamic
+inputs:
+  endpoint:
+    type: string
+  verb:
+    type: string
+  token:
+    type: string
+  msg:
+    type: string
+participants:
+  call:
+    type: http
+    url: input["endpoint"]
+    method: input["verb"]
+    headers:
+      X-Token: input["token"]
+    body:
+      msg: input["msg"]
+      literal: static-value
+flow:
+  - call
+`
+
+	out, err := runWorkflow(t, yaml, map[string]any{
+		"endpoint": ts.URL,
+		"verb":     "post",
+		"token":    "abc123",
+		"msg":      "hello-dynamic",
+	})
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	m, ok := out.(map[string]any)
+	if !ok {
+		t.Fatalf("output type = %T, want map[string]any", out)
+	}
+	if m["method"] != "POST" {
+		t.Errorf("method = %v, want POST", m["method"])
+	}
+	if m["token"] != "abc123" {
+		t.Errorf("token = %v, want abc123", m["token"])
+	}
+	if m["msg"] != "hello-dynamic" {
+		t.Errorf("msg = %v, want hello-dynamic", m["msg"])
+	}
+	if m["literal"] != "static-value" {
+		t.Errorf("literal = %v, want static-value", m["literal"])
+	}
+}
+
 // ── output mapping ────────────────────────────────────────────────────────────
 
 func TestExplicitOutputExpression(t *testing.T) {
@@ -669,6 +738,26 @@ output:
 	}
 	if m["myStatus"] != "ok" {
 		t.Errorf("myStatus = %v, want ok", m["myStatus"])
+	}
+}
+
+func TestExplicitOutputScalarExpression(t *testing.T) {
+	yaml := `
+id: output-scalar
+participants:
+  produce:
+    type: exec
+    run: printf '{"result":"only-value"}'
+flow:
+  - produce
+output: produce.output.result
+`
+	out, err := runWorkflow(t, yaml, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if out != "only-value" {
+		t.Errorf("output = %v, want only-value", out)
 	}
 }
 

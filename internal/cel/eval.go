@@ -27,7 +27,16 @@ func rewriteLoopIdent(expr string) string {
 // Occurrences of "loop." in expr are automatically rewritten to "_loop." before
 // compilation because "loop" is a reserved identifier in the CEL grammar.
 func (e *Environment) Compile(expr string) (gcel.Program, error) {
-	ast, issues := e.env.Compile(rewriteLoopIdent(expr))
+	rewritten := rewriteLoopIdent(expr)
+
+	e.mu.RLock()
+	if prog, ok := e.programs[rewritten]; ok {
+		e.mu.RUnlock()
+		return prog, nil
+	}
+	e.mu.RUnlock()
+
+	ast, issues := e.env.Compile(rewritten)
 	if issues != nil && issues.Err() != nil {
 		return nil, issues.Err()
 	}
@@ -35,6 +44,15 @@ func (e *Environment) Compile(expr string) (gcel.Program, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	e.mu.Lock()
+	if cached, ok := e.programs[rewritten]; ok {
+		e.mu.Unlock()
+		return cached, nil
+	}
+	e.programs[rewritten] = prg
+	e.mu.Unlock()
+
 	return prg, nil
 }
 

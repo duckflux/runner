@@ -1,6 +1,8 @@
 package cel
 
 import (
+	"sync"
+
 	"github.com/duckflux/runner/internal/model"
 	gcel "github.com/google/cel-go/cel"
 )
@@ -10,6 +12,8 @@ import (
 type Environment struct {
 	env          *gcel.Env
 	participants []string
+	mu           sync.RWMutex
+	programs     map[string]gcel.Program
 }
 
 // NewEnv builds a CEL environment for the given workflow, declaring all runtime
@@ -37,7 +41,11 @@ func NewEnv(wf *model.Workflow) (*Environment, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Environment{env: env, participants: participants}, nil
+	return &Environment{
+		env:          env,
+		participants: participants,
+		programs:     make(map[string]gcel.Program),
+	}, nil
 }
 
 // Bindings converts a State into a flat map suitable for passing to cel.Program.Eval.

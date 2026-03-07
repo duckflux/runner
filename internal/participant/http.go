@@ -44,6 +44,13 @@ func NewHTTP(def model.Participant, client *http.Client) *HTTPParticipant {
 	}
 }
 
+// WithDefinition returns a copy configured from def while preserving the HTTP
+// client from the receiver. It is used when workflow runtime values are
+// resolved dynamically (e.g. CEL-evaluated URL/headers/body).
+func (h *HTTPParticipant) WithDefinition(def model.Participant) *HTTPParticipant {
+	return NewHTTP(def, h.client)
+}
+
 // Execute builds and sends the configured HTTP request. If the participant
 // definition has no body, input is used as the request body instead. Strings
 // are written verbatim; all other values are JSON-marshalled. The raw response

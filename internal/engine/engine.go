@@ -22,6 +22,9 @@ func Run(ctx context.Context, wf *model.Workflow, inputs map[string]any, env map
 	if err != nil {
 		return nil, fmt.Errorf("building CEL environment: %w", err)
 	}
+	if err := celEnv.PrecompileWorkflow(wf); err != nil {
+		return nil, fmt.Errorf("precompiling CEL expressions: %w", err)
+	}
 
 	// Initialise execution state with defaults and metadata.
 	state := NewState(wf, inputs, env)
