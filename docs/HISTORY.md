@@ -2,6 +2,19 @@
 
 ## Past Decisions
 
+### Spec v0.2 upgrade
+**Date:** March 2026 · **By:** @ggondim, @copilot
+
+Upgraded the runner to match `duckflux` spec v0.2. Notable changes:
+
+- New JSON Schema (draft 2020-12) and relaxed required fields; `participants` is now optional and inline participants are supported.
+- New `emit` participant type (v1: stubbed/logged). `mcp` moved to use `tool` field (replaces `operation`). `hook` removed from v0.2.
+- Flow changes: `wait` step added (timeout/event/polling), `parallel` accepts full `FlowStep` entries (inline steps), `if` now uses `condition` field, and `loop` supports `as` for custom context names.
+- CEL environment: added `event` and `now` variables, and `cwd` propagation from `exec` participants. The runner rewrites loop context names for CEL expressions.
+- Engine: `runWait` implemented (sleep/poll/event stubs), inline participants executed inline, and step `cwd` is recorded in `StepResult`.
+
+Implementation is backward-compatible where possible; several v1 features remain stubs (event hub integration, full `emit` ack flows, advanced MCP delegation) and are documented as TODOs.
+
 ### 1. Package architecture under `internal/` with clear separation of responsibilities
 **PR:** [#1](https://github.com/duckflux/runner/pull/1) · **By:** @ggondim  
 The project was structured as a Go module using `internal/` with five single-responsibility packages: `model`, `parser`, `cel`, `engine`, `participant`. The CLI uses Cobra with the subcommands `run`, `lint`, and `validate`. External dependencies are limited to: `cel-go`, `yaml.v3`, `jsonschema/v6`, `cobra`.
@@ -38,9 +51,9 @@ Parallel branches are executed as goroutines coordinated by a `sync.WaitGroup`. 
 
 ---
 
-### 7. `agent`, `mcp`, and `hook` are stubs in v1
+### 7. `mcp` and `hook` are stubs in v1
 **PR:** [#1](https://github.com/duckflux/runner/pull/1), [#32](https://github.com/duckflux/runner/pull/32) · **By:** @ggondim  
-The `agent`, `mcp`, and `hook` participant types were intentionally left as stubs that return `"not yet implemented"` in v1. Each stub defines a typed v2 interface to guide future implementations while maintaining JSON schema conformance.
+The `mcp` and `hook` participant types were intentionally left as stubs that return `"not yet implemented"` in v1. Each stub defines a typed v2 interface to guide future implementations while maintaining JSON schema conformance.
 
 ---
 
@@ -123,9 +136,8 @@ The schema now matches the model behavior: `output` may be either a single CEL e
 | [#18](https://github.com/duckflux/runner/issues/18) | Example Workflows & Integration Tests |
 | [#17](https://github.com/duckflux/runner/issues/17) | CLI — validate command |
 | [#16](https://github.com/duckflux/runner/issues/16) | CLI — run command, input handling, output formatting |
-| [#15](https://github.com/duckflux/runner/issues/15) | Participant stubs — agent, mcp, hook |
+| [#15](https://github.com/duckflux/runner/issues/15) | Participant stubs — mcp, hook |
 | [#14](https://github.com/duckflux/runner/issues/14) | Participant — workflow (sub-workflow composition) |
-| [#13](https://github.com/duckflux/runner/issues/13) | Participant — human (interactive input) |
 | [#12](https://github.com/duckflux/runner/issues/12) | Participant — http (HTTP requests) |
 | [#11](https://github.com/duckflux/runner/issues/11) | Participant — exec (shell command execution) |
 | [#10](https://github.com/duckflux/runner/issues/10) | Error Handling & Retry |

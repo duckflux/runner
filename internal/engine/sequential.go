@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"strings"
 	"time"
 
@@ -76,6 +79,23 @@ func runFlowStep(ctx context.Context, wf *model.Workflow, step model.FlowStep, s
 	case step.If != nil:
 		return runIf(ctx, wf, step.If, state, celEnv, reg)
 
+	case step.Wait != nil:
+		if err := runWait(ctx, wf, step.Wait, state, celEnv, reg); err != nil {
+			return "", err
+		}
+		return "", nil
+
+	case step.InlineParticipant != nil:
+		// Execute inline participant definition.
+		def := *step.InlineParticipant
+		if def.As == "" {
+			return "", fmt.Errorf("inline participant missing 'as' name")
+		}
+		if err := runInlineParticipant(ctx, wf, &def, state, celEnv, reg); err != nil {
+			return "", err
+		}
+		return def.As, nil
+
 	default:
 		return "", fmt.Errorf("unsupported flow step type")
 	}
@@ -92,6 +112,9 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 	if !ok {
 		return fmt.Errorf("participant %q has no registered implementation", name)
 	}
+
+	// Inject current timestamp for CEL expressions.
+	state.Now = time.Now().UTC()
 
 	// Evaluate the "when" guard, if present. A false result skips this step.
 	when := ""
@@ -124,6 +147,7 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 	} else {
 		rawInput = def.Input
 	}
+	var effectiveCWD string
 
 	// Evaluate input CEL expressions to produce the concrete input value.
 	input, err := evalInput(rawInput, state, celEnv)
@@ -133,6 +157,8 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 
 	// Resolve runtime participant fields for types that support dynamic values.
 	execParticipant := p
+	var emitEventName string
+	var emitPayload any
 	switch def.Type {
 	case model.ParticipantTypeHTTP:
 		resolvedDef, err := resolveHTTPDefinition(def, state, celEnv)
@@ -151,6 +177,26 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 				return fmt.Errorf("participant %q: resolving exec fields: %w", name, err)
 			}
 			execParticipant = ep.WithDefinition(resolvedDef)
+			// capture effective CWD for recording in the step result
+			effectiveCWD = resolvedDef.CWD
+		}
+	case model.ParticipantTypeWorkflow:
+		if override != nil && override.Workflow != "" {
+			if wp, ok := p.(*participant.WorkflowParticipant); ok {
+				execParticipant = wp.WithPath(override.Workflow)
+			}
+		}
+	case model.ParticipantTypeEmit:
+		resolvedDef, err := resolveEmitDefinition(def, state, celEnv)
+		if err != nil {
+			return fmt.Errorf("participant %q: resolving emit payload: %w", name, err)
+		}
+		emitEventName = resolvedDef.Event
+		emitPayload = resolvedDef.Payload
+		if ep, ok := p.(*participant.EmitParticipant); ok {
+			execParticipant = ep.WithDefinition(resolvedDef)
+		} else {
+			execParticipant = participant.NewEmit(resolvedDef)
 		}
 	}
 
@@ -163,7 +209,7 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 	onErr := resolveOnError(def, override, wf)
 	var retryConfig *model.RetryConfig
 	if onErr == "retry" {
-		retryConfig = def.Retry
+		retryConfig = resolveRetry(def, override)
 	}
 
 	// Execute the participant, retrying with exponential backoff when configured.
@@ -198,6 +244,7 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 				FinishedAt: finishedAtStr,
 				Duration:   durationStr,
 				Error:      execErr.Error(),
+				CWD:        effectiveCWD,
 			})
 			return fmt.Errorf("participant %q failed after %d retries: %w", name, retries, execErr)
 		case "fail":
@@ -207,6 +254,7 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 				FinishedAt: finishedAtStr,
 				Duration:   durationStr,
 				Error:      execErr.Error(),
+				CWD:        effectiveCWD,
 			})
 			return fmt.Errorf("participant %q failed: %w", name, execErr)
 		default:
@@ -218,6 +266,7 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 				FinishedAt: finishedAtStr,
 				Duration:   durationStr,
 				Error:      execErr.Error(),
+				CWD:        effectiveCWD,
 			})
 			fallbackOverride := &model.ParticipantOverrideStep{OnError: "fail"}
 			if redirectErr := runParticipantStep(ctx, wf, onErr, fallbackOverride, state, celEnv, reg); redirectErr != nil {
@@ -238,8 +287,22 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 		StartedAt:  startedAtStr,
 		FinishedAt: finishedAtStr,
 		Duration:   durationStr,
+		CWD:        effectiveCWD,
 	})
+	if emitEventName != "" {
+		state.PublishEvent(emitEventName, emitPayload)
+	}
 	return nil
+}
+
+// runInlineParticipant executes an inline participant definition. The provided
+// def must include an `As` name which will be used to record the step result
+// in the execution state.
+func runInlineParticipant(ctx context.Context, wf *model.Workflow, def *model.Participant, state *cel.State, celEnv *cel.Environment, reg participant.Registry) error {
+	override := &model.ParticipantOverrideStep{
+		When: def.When,
+	}
+	return runParticipantStep(ctx, wf, def.As, override, state, celEnv, reg)
 }
 
 // resolveOnError returns the effective onError strategy for a step invocation.
@@ -255,6 +318,13 @@ func resolveOnError(def model.Participant, override *model.ParticipantOverrideSt
 		return wf.Defaults.OnError
 	}
 	return "fail"
+}
+
+func resolveRetry(def model.Participant, override *model.ParticipantOverrideStep) *model.RetryConfig {
+	if override != nil && override.Retry != nil {
+		return override.Retry
+	}
+	return def.Retry
 }
 
 // resolveExecDefinition resolves the effective cwd for an exec participant
@@ -299,6 +369,18 @@ func resolveExecDefinition(ctx context.Context, def model.Participant, wf *model
 
 	// 3) CLI --cwd (stored in context), 4) process cwd (already captured in base)
 	resolved.CWD = base
+	return resolved, nil
+}
+
+func resolveEmitDefinition(def model.Participant, state *cel.State, env *cel.Environment) (model.Participant, error) {
+	resolved := def
+	if def.Payload != nil {
+		payload, err := evalMaybeCEL(def.Payload, state, env)
+		if err != nil {
+			return model.Participant{}, err
+		}
+		resolved.Payload = payload
+	}
 	return resolved, nil
 }
 
@@ -477,22 +559,192 @@ func resolveOutput(output *model.WorkflowOutput, state *cel.State, env *cel.Envi
 	}
 
 	if output.Map != nil {
-		result := make(map[string]any, len(output.Map))
-		for key, expr := range output.Map {
-			prog, err := env.Compile(expr)
-			if err != nil {
-				return nil, fmt.Errorf("compiling output field %q: %w", key, err)
+		result, err := evalOutputMap(output.Map, state, env)
+		if err != nil {
+			return nil, err
+		}
+		return result, nil
+	}
+
+	if output.MapField != nil {
+		result, err := evalOutputMap(output.MapField, state, env)
+		if err != nil {
+			return nil, err
+		}
+		if len(output.Schema) > 0 {
+			if err := validateOutputSchema(output.Schema, result); err != nil {
+				return nil, err
 			}
-			val, err := env.Eval(prog, state)
-			if err != nil {
-				return nil, fmt.Errorf("evaluating output field %q: %w", key, err)
-			}
-			result[key] = val
 		}
 		return result, nil
 	}
 
 	return stepOutput(state, lastStep), nil
+}
+
+func evalOutputMap(m map[string]string, state *cel.State, env *cel.Environment) (map[string]any, error) {
+	result := make(map[string]any, len(m))
+	for key, expr := range m {
+		prog, err := env.Compile(expr)
+		if err != nil {
+			return nil, fmt.Errorf("compiling output field %q: %w", key, err)
+		}
+		val, err := env.Eval(prog, state)
+		if err != nil {
+			return nil, fmt.Errorf("evaluating output field %q: %w", key, err)
+		}
+		result[key] = val
+	}
+	return result, nil
+}
+
+func validateOutputSchema(schema map[string]model.InputField, values map[string]any) error {
+	for key, field := range schema {
+		val, ok := values[key]
+		if field.Required && !ok {
+			return fmt.Errorf("output schema: required field %q is missing", key)
+		}
+		if !ok {
+			continue
+		}
+		if err := validateValueAgainstField(key, val, field); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateValueAgainstField(key string, value any, field model.InputField) error {
+	expected := field.Type
+	if expected == "" {
+		expected = "string"
+	}
+	switch expected {
+	case "string":
+		s, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("output schema: field %q must be string, got %T", key, value)
+		}
+		if field.MinLength != nil && len(s) < *field.MinLength {
+			return fmt.Errorf("output schema: field %q length must be >= %d", key, *field.MinLength)
+		}
+		if field.MaxLength != nil && len(s) > *field.MaxLength {
+			return fmt.Errorf("output schema: field %q length must be <= %d", key, *field.MaxLength)
+		}
+		if field.Pattern != "" {
+			re, err := regexp.Compile(field.Pattern)
+			if err != nil {
+				return fmt.Errorf("output schema: invalid pattern for field %q: %w", key, err)
+			}
+			if !re.MatchString(s) {
+				return fmt.Errorf("output schema: field %q does not match pattern %q", key, field.Pattern)
+			}
+		}
+	case "boolean":
+		if _, ok := value.(bool); !ok {
+			return fmt.Errorf("output schema: field %q must be boolean, got %T", key, value)
+		}
+	case "integer":
+		if !isInteger(value) {
+			return fmt.Errorf("output schema: field %q must be integer, got %T", key, value)
+		}
+		if n, ok := toFloat(value); ok {
+			if field.Minimum != nil && n < *field.Minimum {
+				return fmt.Errorf("output schema: field %q must be >= %v", key, *field.Minimum)
+			}
+			if field.Maximum != nil && n > *field.Maximum {
+				return fmt.Errorf("output schema: field %q must be <= %v", key, *field.Maximum)
+			}
+		}
+	case "number":
+		n, ok := toFloat(value)
+		if !ok {
+			return fmt.Errorf("output schema: field %q must be number, got %T", key, value)
+		}
+		if field.Minimum != nil && n < *field.Minimum {
+			return fmt.Errorf("output schema: field %q must be >= %v", key, *field.Minimum)
+		}
+		if field.Maximum != nil && n > *field.Maximum {
+			return fmt.Errorf("output schema: field %q must be <= %v", key, *field.Maximum)
+		}
+	case "array":
+		arr, ok := value.([]any)
+		if !ok {
+			return fmt.Errorf("output schema: field %q must be array, got %T", key, value)
+		}
+		if field.Items != nil {
+			for i, item := range arr {
+				if err := validateValueAgainstField(fmt.Sprintf("%s[%d]", key, i), item, *field.Items); err != nil {
+					return err
+				}
+			}
+		}
+	case "object":
+		if _, ok := value.(map[string]any); !ok {
+			return fmt.Errorf("output schema: field %q must be object, got %T", key, value)
+		}
+	}
+
+	if len(field.Enum) > 0 {
+		found := false
+		for _, v := range field.Enum {
+			if reflect.DeepEqual(v, value) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("output schema: field %q value %v is not in enum", key, value)
+		}
+	}
+
+	return nil
+}
+
+func isInteger(v any) bool {
+	switch n := v.(type) {
+	case int, int8, int16, int32, int64:
+		return true
+	case uint, uint8, uint16, uint32, uint64:
+		return true
+	case float64:
+		return math.Trunc(n) == n
+	case float32:
+		return float32(math.Trunc(float64(n))) == n
+	default:
+		return false
+	}
+}
+
+func toFloat(v any) (float64, bool) {
+	switch n := v.(type) {
+	case int:
+		return float64(n), true
+	case int8:
+		return float64(n), true
+	case int16:
+		return float64(n), true
+	case int32:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case uint:
+		return float64(n), true
+	case uint8:
+		return float64(n), true
+	case uint16:
+		return float64(n), true
+	case uint32:
+		return float64(n), true
+	case uint64:
+		return float64(n), true
+	case float32:
+		return float64(n), true
+	case float64:
+		return n, true
+	default:
+		return 0, false
+	}
 }
 
 // stepOutput returns the output value recorded for the named step, or nil if

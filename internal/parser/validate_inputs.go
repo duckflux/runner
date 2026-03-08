@@ -42,19 +42,26 @@ func ValidateInputs(wf *model.Workflow, inputs map[string]any) ValidationErrors 
 			continue
 		}
 
-		if field.Type != "" {
-			if e := checkInputType(name, val, field.Type); e != nil {
-				errs = append(errs, e)
-				continue
-			}
+		expectedType := field.Type
+		if expectedType == "" {
+			expectedType = "string"
 		}
 
+		if e := checkInputType(name, val, expectedType); e != nil {
+			errs = append(errs, e)
+			continue
+		}
+		normalized := normalizeInputValue(expectedType, val)
+
 		if field.Format != "" {
-			if s, ok := val.(string); ok {
+			if s, ok := normalized.(string); ok {
 				if e := checkStringFormat(name, s, field.Format); e != nil {
 					errs = append(errs, e)
 				}
 			}
+		}
+		if e := checkInputConstraints(name, normalized, field); e != nil {
+			errs = append(errs, e)
 		}
 	}
 
@@ -149,9 +156,55 @@ func checkInputType(name string, val any, expectedType string) *ValidationError 
 				Message: fmt.Sprintf("input %q must be a number, got %T", name, val),
 			}
 		}
+	case "array":
+		if _, ok := val.([]any); !ok {
+			return &ValidationError{
+				Field:   path,
+				Message: fmt.Sprintf("input %q must be an array, got %T", name, val),
+			}
+		}
+	case "object":
+		if _, ok := val.(map[string]any); !ok {
+			return &ValidationError{
+				Field:   path,
+				Message: fmt.Sprintf("input %q must be an object, got %T", name, val),
+			}
+		}
 	}
 
 	return nil
+}
+
+func normalizeInputValue(expectedType string, val any) any {
+	switch expectedType {
+	case "boolean":
+		if s, ok := val.(string); ok {
+			return s == "true"
+		}
+	case "integer":
+		switch v := val.(type) {
+		case string:
+			if parsed, err := strconv.ParseInt(v, 10, 64); err == nil {
+				return parsed
+			}
+		case float64:
+			if math.Trunc(v) == v {
+				return int64(v)
+			}
+		case float32:
+			f := float64(v)
+			if math.Trunc(f) == f {
+				return int64(f)
+			}
+		}
+	case "number":
+		if s, ok := val.(string); ok {
+			if parsed, err := strconv.ParseFloat(s, 64); err == nil {
+				return parsed
+			}
+		}
+	}
+	return val
 }
 
 // emailRegexp is a basic RFC 5322-like email pattern sufficient for format
@@ -198,4 +251,116 @@ func checkStringFormat(name, val, format string) *ValidationError {
 	}
 	// Unknown formats are silently accepted.
 	return nil
+}
+
+func checkInputConstraints(name string, val any, field model.InputField) *ValidationError {
+	path := fmt.Sprintf("/inputs/%s", name)
+
+	if len(field.Enum) > 0 {
+		found := false
+		for _, allowed := range field.Enum {
+			if fmt.Sprint(allowed) == fmt.Sprint(val) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return &ValidationError{
+				Field:   path,
+				Message: fmt.Sprintf("input %q must be one of %v, got %v", name, field.Enum, val),
+			}
+		}
+	}
+
+	if n, ok := numericValue(val); ok {
+		if field.Minimum != nil && n < *field.Minimum {
+			return &ValidationError{
+				Field:   path,
+				Message: fmt.Sprintf("input %q must be >= %v, got %v", name, *field.Minimum, n),
+			}
+		}
+		if field.Maximum != nil && n > *field.Maximum {
+			return &ValidationError{
+				Field:   path,
+				Message: fmt.Sprintf("input %q must be <= %v, got %v", name, *field.Maximum, n),
+			}
+		}
+	}
+
+	if s, ok := val.(string); ok {
+		if field.MinLength != nil && len(s) < *field.MinLength {
+			return &ValidationError{
+				Field:   path,
+				Message: fmt.Sprintf("input %q length must be >= %d", name, *field.MinLength),
+			}
+		}
+		if field.MaxLength != nil && len(s) > *field.MaxLength {
+			return &ValidationError{
+				Field:   path,
+				Message: fmt.Sprintf("input %q length must be <= %d", name, *field.MaxLength),
+			}
+		}
+		if field.Pattern != "" {
+			re, err := regexp.Compile(field.Pattern)
+			if err != nil {
+				return &ValidationError{
+					Field:   path,
+					Message: fmt.Sprintf("input %q has invalid pattern %q: %v", name, field.Pattern, err),
+				}
+			}
+			if !re.MatchString(s) {
+				return &ValidationError{
+					Field:   path,
+					Message: fmt.Sprintf("input %q does not match pattern %q", name, field.Pattern),
+				}
+			}
+		}
+	}
+
+	if field.Items != nil {
+		if arr, ok := val.([]any); ok {
+			itemType := field.Items.Type
+			if itemType == "" {
+				itemType = "string"
+			}
+			for i, item := range arr {
+				if err := checkInputType(fmt.Sprintf("%s[%d]", name, i), item, itemType); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func numericValue(v any) (float64, bool) {
+	switch n := v.(type) {
+	case int:
+		return float64(n), true
+	case int8:
+		return float64(n), true
+	case int16:
+		return float64(n), true
+	case int32:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case uint:
+		return float64(n), true
+	case uint8:
+		return float64(n), true
+	case uint16:
+		return float64(n), true
+	case uint32:
+		return float64(n), true
+	case uint64:
+		return float64(n), true
+	case float32:
+		return float64(n), true
+	case float64:
+		return n, true
+	default:
+		return 0, false
+	}
 }

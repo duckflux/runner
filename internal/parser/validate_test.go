@@ -99,7 +99,7 @@ func TestValidateSemanticUnknownParallelStep(t *testing.T) {
 			"stepA": {Type: model.ParticipantTypeExec},
 		},
 		Flow: []model.FlowStep{
-			{Parallel: &model.ParallelStep{Steps: []string{"stepA", "ghost"}}},
+			{Parallel: &model.ParallelStep{Steps: []model.FlowStep{{Participant: "stepA"}, {Participant: "ghost"}}}},
 		},
 	}
 	env := newCELEnv(t, wf)
@@ -187,7 +187,7 @@ func TestValidateSemanticOnErrorValidRedirect(t *testing.T) {
 
 func TestValidateSemanticDefaultsOnErrorInvalid(t *testing.T) {
 	wf := &model.Workflow{
-		ID: "test",
+		ID:       "test",
 		Defaults: &model.Defaults{OnError: "ghost"},
 		Participants: map[string]model.Participant{
 			"stepA": {Type: model.ParticipantTypeExec},
@@ -425,8 +425,8 @@ flow:
 	if !isValidationError(err) {
 		t.Errorf("expected ValidationErrors, got %T: %v", err, err)
 	}
-	if !strings.Contains(err.Error(), "reserved") {
-		t.Errorf("expected 'reserved' in error, got: %v", err)
+	if !strings.Contains(err.Error(), "/participants") {
+		t.Errorf("expected participant validation error, got: %v", err)
 	}
 }
 

@@ -42,21 +42,6 @@ func TestBuildRegistryHTTP(t *testing.T) {
 	}
 }
 
-func TestBuildRegistryHuman(t *testing.T) {
-	wf := &model.Workflow{
-		Participants: map[string]model.Participant{
-			"reviewer": {Type: model.ParticipantTypeHuman, Prompt: "Approve?"},
-		},
-	}
-	reg, err := BuildRegistry(wf, nil, nil)
-	if err != nil {
-		t.Fatalf("BuildRegistry() error: %v", err)
-	}
-	if _, ok := reg["reviewer"].(*HumanParticipant); !ok {
-		t.Errorf("BuildRegistry() reviewer is %T, want *HumanParticipant", reg["reviewer"])
-	}
-}
-
 func TestBuildRegistryWorkflowParticipant(t *testing.T) {
 	stub := func(_ context.Context, _ string, _ map[string]any, _ map[string]string) (any, error) {
 		return nil, nil
@@ -75,21 +60,6 @@ func TestBuildRegistryWorkflowParticipant(t *testing.T) {
 	}
 }
 
-func TestBuildRegistryAgent(t *testing.T) {
-	wf := &model.Workflow{
-		Participants: map[string]model.Participant{
-			"ai": {Type: model.ParticipantTypeAgent},
-		},
-	}
-	reg, err := BuildRegistry(wf, nil, nil)
-	if err != nil {
-		t.Fatalf("BuildRegistry() error: %v", err)
-	}
-	if _, ok := reg["ai"].(*AgentParticipant); !ok {
-		t.Errorf("BuildRegistry() ai is %T, want *AgentParticipant", reg["ai"])
-	}
-}
-
 func TestBuildRegistryMCP(t *testing.T) {
 	wf := &model.Workflow{
 		Participants: map[string]model.Participant{
@@ -105,18 +75,18 @@ func TestBuildRegistryMCP(t *testing.T) {
 	}
 }
 
-func TestBuildRegistryHook(t *testing.T) {
+func TestBuildRegistryEmit(t *testing.T) {
 	wf := &model.Workflow{
 		Participants: map[string]model.Participant{
-			"hook": {Type: model.ParticipantTypeHook},
+			"evt": {Type: model.ParticipantTypeEmit, Event: "build.done"},
 		},
 	}
 	reg, err := BuildRegistry(wf, nil, nil)
 	if err != nil {
 		t.Fatalf("BuildRegistry() error: %v", err)
 	}
-	if _, ok := reg["hook"].(*HookParticipant); !ok {
-		t.Errorf("BuildRegistry() hook is %T, want *HookParticipant", reg["hook"])
+	if _, ok := reg["evt"].(*EmitParticipant); !ok {
+		t.Errorf("BuildRegistry() evt is %T, want *EmitParticipant", reg["evt"])
 	}
 }
 

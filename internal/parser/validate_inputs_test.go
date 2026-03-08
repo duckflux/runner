@@ -14,7 +14,7 @@ func workflowWithInputs(inputs map[string]model.InputField) *model.Workflow {
 		Participants: map[string]model.Participant{
 			"stepA": {Type: model.ParticipantTypeExec, Run: "echo x"},
 		},
-		Flow: []model.FlowStep{{Participant: "stepA"}},
+		Flow:   []model.FlowStep{{Participant: "stepA"}},
 		Inputs: inputs,
 	}
 }

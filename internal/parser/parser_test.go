@@ -44,7 +44,6 @@ name: Full Workflow
 version: "1.0"
 defaults:
   timeout: 5m
-  onError: fail
   cwd: "./workspace"
 inputs:
   repoUrl:
@@ -52,8 +51,8 @@ inputs:
     required: true
 participants:
   coder:
-    type: agent
-    model: claude-sonnet-4
+    type: exec
+    run: echo coder
     cwd: input["repoUrl"]
     timeout: 15m
     onError: retry
@@ -62,8 +61,8 @@ participants:
       backoff: 2s
       factor: 2
   reviewer:
-    type: agent
-    model: claude-sonnet-4
+    type: exec
+    run: echo reviewer
 flow:
   - coder
   - loop:
@@ -151,12 +150,12 @@ participants:
 flow:
   - stepA
 `
-	_, err := Parse(strings.NewReader(src))
-	if err == nil {
-		t.Fatal("expected error for missing id, got nil")
+	wf, err := Parse(strings.NewReader(src))
+	if err != nil {
+		t.Fatalf("unexpected error parsing workflow without id: %v", err)
 	}
-	if !isValidationError(err) {
-		t.Errorf("expected ValidationErrors, got %T: %v", err, err)
+	if wf.ID != "" {
+		t.Errorf("expected empty ID, got %q", wf.ID)
 	}
 }
 
@@ -168,7 +167,7 @@ flow:
 `
 	_, err := Parse(strings.NewReader(src))
 	if err == nil {
-		t.Fatal("expected error for missing participants, got nil")
+		t.Fatal("expected error for missing participants when flow references undefined participant, got nil")
 	}
 	if !isValidationError(err) {
 		t.Errorf("expected ValidationErrors, got %T: %v", err, err)

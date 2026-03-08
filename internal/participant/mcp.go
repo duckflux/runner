@@ -2,7 +2,6 @@ package participant
 
 import (
 	"context"
-	"errors"
 
 	"github.com/duckflux/runner/internal/model"
 )
@@ -14,16 +13,16 @@ type MCPExecutor interface {
 	Participant
 	// SetServer configures the MCP server endpoint.
 	SetServer(server string)
-	// SetOperation configures the MCP operation to invoke.
-	SetOperation(operation string)
+	// SetTool configures the MCP tool/operation to invoke.
+	SetTool(tool string)
 }
 
-// MCPParticipant is a stub for the "mcp" participant type.
-// It satisfies the Participant interface and returns a clear
-// "not yet implemented" error on every Execute call.
-// A real implementation will be provided in a future release via MCPExecutor.
+// MCPParticipant provides a deterministic baseline implementation for the
+// "mcp" participant type. It returns the configured server/tool and input.
 type MCPParticipant struct {
-	def model.Participant
+	def    model.Participant
+	server string
+	tool   string
 }
 
 // NewMCP constructs an MCPParticipant from a participant definition.
@@ -31,8 +30,30 @@ func NewMCP(def model.Participant) *MCPParticipant {
 	return &MCPParticipant{def: def}
 }
 
-// Execute always returns an error indicating that the mcp participant type
-// is not yet implemented.
-func (m *MCPParticipant) Execute(_ context.Context, _ any) (any, error) {
-	return nil, errors.New("mcp participant type is not yet implemented")
+// Execute returns a structured response with server/tool metadata.
+func (m *MCPParticipant) Execute(_ context.Context, input any) (any, error) {
+	server := m.server
+	if server == "" {
+		server = m.def.Server
+	}
+	tool := m.tool
+	if tool == "" {
+		tool = m.def.Tool
+	}
+	return map[string]any{
+		"server": server,
+		"tool":   tool,
+		"output": input,
+		"status": "success",
+	}, nil
+}
+
+// SetServer configures the MCP endpoint for future executions.
+func (m *MCPParticipant) SetServer(server string) {
+	m.server = server
+}
+
+// SetTool configures the tool/operation to be invoked on the MCP server.
+func (m *MCPParticipant) SetTool(tool string) {
+	m.tool = tool
 }

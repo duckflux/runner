@@ -46,6 +46,16 @@ func NewWorkflow(path string, env map[string]string, runnerFn SubWorkflowRunnerF
 	}, nil
 }
 
+// WithPath returns a copy of the participant configured with a different
+// workflow path, preserving env and runner function.
+func (w *WorkflowParticipant) WithPath(path string) *WorkflowParticipant {
+	return &WorkflowParticipant{
+		path:     path,
+		env:      w.env,
+		runnerFn: w.runnerFn,
+	}
+}
+
 // Execute runs the referenced sub-workflow. input is the evaluated step input
 // (typically a map[string]any produced by CEL evaluation). nil input results
 // in an empty inputs map being passed to the child workflow. The child's

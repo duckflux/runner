@@ -518,11 +518,12 @@ participants:
     run: echo "low score"
 flow:
   - produce
-  - if: "produce.output.score > 7"
-    then:
-      - high
-    else:
-      - low
+  - if:
+      condition: "produce.output.score > 7"
+      then:
+        - high
+      else:
+        - low
 `
 	out, err := runWorkflow(t, yaml, nil)
 	if err != nil {
@@ -552,11 +553,12 @@ participants:
     run: echo "low score"
 flow:
   - produce
-  - if: "produce.output.score > 7"
-    then:
-      - high
-    else:
-      - low
+  - if:
+      condition: "produce.output.score > 7"
+      then:
+        - high
+      else:
+        - low
 `
 	out, err := runWorkflow(t, yaml, nil)
 	if err != nil {

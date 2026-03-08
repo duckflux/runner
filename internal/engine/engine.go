@@ -17,17 +17,26 @@ import (
 // The returned value is the resolved workflow output (a plain value, a
 // map[string]any, or nil when no output is defined and no steps succeeded).
 func Run(ctx context.Context, wf *model.Workflow, inputs map[string]any, env map[string]string, reg participant.Registry) (any, error) {
+	wfForRuntime := workflowWithInlineParticipants(wf)
+
 	// Build a CEL environment scoped to this workflow's variable declarations.
-	celEnv, err := cel.NewEnv(wf)
+	celEnv, err := cel.NewEnv(wfForRuntime)
 	if err != nil {
 		return nil, fmt.Errorf("building CEL environment: %w", err)
 	}
-	if err := celEnv.PrecompileWorkflow(wf); err != nil {
+	if err := celEnv.PrecompileWorkflow(wfForRuntime); err != nil {
 		return nil, fmt.Errorf("precompiling CEL expressions: %w", err)
 	}
 
 	// Initialise execution state with defaults and metadata.
 	state := NewState(wf, inputs, env)
+	if base := baseCWDFromContext(ctx); base != "" {
+		state.Execution.CWD = base
+		if state.Execution.Context == nil {
+			state.Execution.Context = map[string]any{}
+		}
+		state.Execution.Context["cwd"] = base
+	}
 
 	// Execute all top-level flow steps sequentially.
 	lastStep, err := runSequential(ctx, wf, wf.Flow, state, celEnv, reg)
@@ -40,4 +49,33 @@ func Run(ctx context.Context, wf *model.Workflow, inputs map[string]any, env map
 
 	// Resolve and return the workflow output expression.
 	return resolveOutput(wf.Output, state, celEnv, lastStep)
+}
+
+func workflowWithInlineParticipants(wf *model.Workflow) *model.Workflow {
+	synthetic := make(map[string]model.Participant, len(wf.Participants))
+	for k, v := range wf.Participants {
+		synthetic[k] = v
+	}
+	var walk func([]model.FlowStep)
+	walk = func(steps []model.FlowStep) {
+		for _, s := range steps {
+			if s.InlineParticipant != nil && s.InlineParticipant.As != "" {
+				synthetic[s.InlineParticipant.As] = *s.InlineParticipant
+			}
+			if s.Loop != nil {
+				walk(s.Loop.Steps)
+			}
+			if s.Parallel != nil {
+				walk(s.Parallel.Steps)
+			}
+			if s.If != nil {
+				walk(s.If.Then)
+				walk(s.If.Else)
+			}
+		}
+	}
+	walk(wf.Flow)
+	wfCopy := *wf
+	wfCopy.Participants = synthetic
+	return &wfCopy
 }

@@ -24,6 +24,10 @@ func NewEnv(wf *model.Workflow) (*Environment, error) {
 		gcel.Variable("execution", gcel.MapType(gcel.StringType, gcel.DynType)),
 		gcel.Variable("input", gcel.MapType(gcel.StringType, gcel.DynType)),
 		gcel.Variable("env", gcel.MapType(gcel.StringType, gcel.StringType)),
+		// Event payload variable available for wait/emit related expressions.
+		gcel.Variable("event", gcel.MapType(gcel.StringType, gcel.DynType)),
+		// Now is injected by the engine as a timestamp for expressions.
+		gcel.Variable("now", gcel.TimestampType),
 		// "loop" is a CEL reserved identifier, so the loop context variable is
 		// declared internally as "_loop". Expressions written with "loop." are
 		// transparently rewritten to "_loop." by Compile before type-checking.
@@ -72,10 +76,13 @@ func (e *Environment) Bindings(s *State) map[string]any {
 			"number":    s.Execution.Number,
 			"startedAt": s.Execution.StartedAt,
 			"status":    s.Execution.Status,
+			"cwd":       s.Execution.CWD,
 			"context":   s.Execution.Context,
 		},
 		"input": input,
 		"env":   env,
+		"event": map[string]any{},
+		"now":   s.Now,
 		// "_loop" is used because "loop" is a reserved identifier in CEL.
 		"_loop": map[string]any{},
 	}
@@ -102,12 +109,18 @@ func (e *Environment) Bindings(s *State) map[string]any {
 				"finishedAt": result.FinishedAt,
 				"duration":   result.Duration,
 				"error":      result.Error,
+				"cwd":        result.CWD,
 			}
 		} else {
 			vars[name] = map[string]any{}
 		}
 	}
 	s.mu.RUnlock()
+
+	// Populate event binding if present in the state (used by wait/emit steps).
+	if s.EventPayload != nil {
+		vars["event"] = s.EventPayload
+	}
 
 	return vars
 }

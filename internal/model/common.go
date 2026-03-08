@@ -15,6 +15,7 @@ const (
 	ReservedOutput    = "output"
 	ReservedEnv       = "env"
 	ReservedLoop      = "loop"
+	ReservedEvent     = "event"
 )
 
 // ReservedNames is the full list of reserved participant name strings.
@@ -25,6 +26,7 @@ var ReservedNames = []string{
 	ReservedOutput,
 	ReservedEnv,
 	ReservedLoop,
+	ReservedEvent,
 }
 
 // reservedNamesSet is a set used for O(1) reserved name lookups.
@@ -35,6 +37,7 @@ var reservedNamesSet = map[string]bool{
 	ReservedOutput:    true,
 	ReservedEnv:       true,
 	ReservedLoop:      true,
+	ReservedEvent:     true,
 }
 
 // IsReservedName reports whether name is a reserved participant identifier.
@@ -42,7 +45,7 @@ func IsReservedName(name string) bool {
 	return reservedNamesSet[name]
 }
 
-// Duration wraps time.Duration and supports YAML unmarshaling of human-readable
+// Duration wraps time.Duration and supports YAML unmarshaling of
 // strings like "30s", "5m", "1h".
 type Duration struct {
 	time.Duration

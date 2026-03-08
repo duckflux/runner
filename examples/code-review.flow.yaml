@@ -73,11 +73,12 @@ flow:
       - tests
       - lint
 
-  - if: 'tests.status == "success" && lint.status == "success"'
-    then:
-      - notify_success
-    else:
-      - notify_failure
+  - if:
+      condition: 'tests.status == "success" && lint.status == "success"'
+      then:
+        - notify_success
+      else:
+        - notify_failure
 
 output:
   approved: reviewer.output.approved

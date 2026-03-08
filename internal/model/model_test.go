@@ -151,8 +151,8 @@ parallel:
 		t.Fatalf("Parallel.Steps len = %d, want %d", len(step.Parallel.Steps), len(want))
 	}
 	for i, s := range want {
-		if step.Parallel.Steps[i] != s {
-			t.Errorf("Parallel.Steps[%d] = %q, want %q", i, step.Parallel.Steps[i], s)
+		if step.Parallel.Steps[i].Participant != s {
+			t.Errorf("Parallel.Steps[%d].Participant = %q, want %q", i, step.Parallel.Steps[i].Participant, s)
 		}
 	}
 }
@@ -303,7 +303,6 @@ func TestWorkflowOutputInvalidKind(t *testing.T) {
 	}
 }
 
-
 func TestWorkflowOutputMap(t *testing.T) {
 	src := `
 approved: reviewer.output.approved
@@ -347,8 +346,8 @@ inputs:
     default: main
 participants:
   coder:
-    type: agent
-    model: claude-sonnet-4
+    type: exec
+    run: echo coder
     timeout: 15m
     onError: retry
     retry:
@@ -356,8 +355,8 @@ participants:
       backoff: 2s
       factor: 2
   reviewer:
-    type: agent
-    model: claude-sonnet-4
+    type: exec
+    run: echo reviewer
     onError: fail
 flow:
   - coder
@@ -406,8 +405,8 @@ output:
 		t.Fatalf("Participants len = %d, want 2", len(wf.Participants))
 	}
 	coder := wf.Participants["coder"]
-	if coder.Type != ParticipantTypeAgent {
-		t.Errorf("coder.Type = %q, want agent", coder.Type)
+	if coder.Type != ParticipantTypeExec {
+		t.Errorf("coder.Type = %q, want exec", coder.Type)
 	}
 	if coder.Retry == nil {
 		t.Fatal("coder.Retry should not be nil")

@@ -35,20 +35,14 @@ func buildOne(name string, def model.Participant, env map[string]string, runnerF
 	case model.ParticipantTypeHTTP:
 		return NewHTTP(def, nil), nil
 
-	case model.ParticipantTypeHuman:
-		return NewHuman(def), nil
-
 	case model.ParticipantTypeWorkflow:
 		return NewWorkflow(def.Path, env, runnerFn)
-
-	case model.ParticipantTypeAgent:
-		return NewAgent(def), nil
 
 	case model.ParticipantTypeMCP:
 		return NewMCP(def), nil
 
-	case model.ParticipantTypeHook:
-		return NewHook(def), nil
+	case model.ParticipantTypeEmit:
+		return NewEmit(def), nil
 
 	default:
 		return nil, fmt.Errorf("participant %q: unknown type %q", name, def.Type)

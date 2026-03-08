@@ -721,7 +721,7 @@ func TestRunParallelBothStepsExecuted(t *testing.T) {
 			"step2": {Type: model.ParticipantTypeExec},
 		},
 		Flow: []model.FlowStep{
-			{Parallel: &model.ParallelStep{Steps: []string{"step1", "step2"}}},
+			{Parallel: &model.ParallelStep{Steps: []model.FlowStep{{Participant: "step1"}, {Participant: "step2"}}}},
 		},
 		Output: &model.WorkflowOutput{Map: map[string]string{
 			"r1": "step1.output",
@@ -756,7 +756,7 @@ func TestRunParallelOneFailCancelsOthers(t *testing.T) {
 			"step2": {Type: model.ParticipantTypeExec},
 		},
 		Flow: []model.FlowStep{
-			{Parallel: &model.ParallelStep{Steps: []string{"step1", "step2"}}},
+			{Parallel: &model.ParallelStep{Steps: []model.FlowStep{{Participant: "step1"}, {Participant: "step2"}}}},
 		},
 	}
 	reg := participant.Registry{"step1": mp1, "step2": mp2}
@@ -772,7 +772,7 @@ func TestRunParallelEmpty(t *testing.T) {
 		ID:           "wf1",
 		Participants: map[string]model.Participant{},
 		Flow: []model.FlowStep{
-			{Parallel: &model.ParallelStep{Steps: []string{}}},
+			{Parallel: &model.ParallelStep{Steps: []model.FlowStep{}}},
 		},
 	}
 	reg := participant.Registry{}

@@ -35,9 +35,8 @@ duckflux/
 │       ├── registry.go       #   type Participant interface { Execute(ctx, input) (output, error) }
 │       ├── exec.go           #   Shell command execution via os/exec
 │       ├── http.go           #   HTTP requests via net/http
-│       ├── human.go          #   Interactive stdin/stdout prompt
+│       ├── emit.go           #   Event emission (stub/log in v1)
 │       ├── workflow.go       #   Sub-workflow: recursive Parse + Run
-│       ├── agent.go          #   Stub — returns error "agent not yet supported"
 │       └── mcp.go            #   Stub — returns error "mcp not yet supported"
 ├── schema/
 │   └── duckflux.schema.json  # Embedded copy from spec repo
@@ -229,9 +228,8 @@ Implementations (can be built in parallel, all depend on the interface from Phas
 
 - **exec**: `os/exec.CommandContext`, pipe stdin from input, capture stdout/stderr, respect context cancellation. Environment variable injection.
 - **http**: `net/http` client, build request from participant config (url, method, headers, body with CEL-evaluated values), return response body. Respect context timeout.
-- **human**: Print prompt to stderr, read line from stdin. In non-interactive mode (no TTY), fail with clear error.
+- **emit**: Publish an event payload to the runner event hub (v1 baseline may log/stub while preserving DSL contract).
 - **workflow**: Parse sub-workflow YAML, create child state with mapped inputs, recursive `engine.Run`, return child output.
-- **agent**: Stub returning `"agent participant type is not yet implemented"` error. Define the interface so v2 can plug in.
 - **mcp**: Stub returning `"mcp participant type is not yet implemented"` error. Define the interface so v2 can plug in.
 - **hook**: Not implemented in v1 per spec (depends on signals). Stub with error.
 
@@ -269,15 +267,14 @@ Phase 0 ────────────────────────
     │                   │                             │
     │                   ├──→ Phase 5a (exec)          │
     │                   ├──→ Phase 5b (http)          │
-    │                   ├──→ Phase 5c (human)         │
+    │                   ├──→ Phase 5c (emit)          │
     │                   ├──→ Phase 5d (workflow)      │
-    │                   ├──→ Phase 5e (agent stub)    │
-    │                   └──→ Phase 5f (mcp stub)      │
+    │                   └──→ Phase 5e (mcp stub)      │
     │                                                 │
     └──→ Phase 6 (CLI & Integration) ←───── all above │
 ```
 
-Maximum parallelism: Phase 1 + Phase 2 in parallel, then Phase 5a–5f all in parallel.
+Maximum parallelism: Phase 1 + Phase 2 in parallel, then Phase 5a–5e all in parallel.
 
 ---
 
@@ -364,9 +361,9 @@ Dependencies: #6.
 
 Dependencies: #6.
 
-### Issue 12: Participant — human (interactive input)
+### Issue 12: Participant — emit (event publication)
 
-**Phase 5c.** Implement `human` participant: print prompt to stderr, read from stdin, detect non-interactive mode (no TTY) and fail with clear error.
+**Phase 5c.** Implement `emit` participant: publish/log event payload, preserve event metadata, and keep runtime behavior deterministic in v1.
 
 Dependencies: #6.
 
@@ -376,9 +373,9 @@ Dependencies: #6.
 
 Dependencies: #6, #4.
 
-### Issue 14: Participant stubs — agent, mcp, hook
+### Issue 14: Participant stubs — mcp, hook
 
-**Phase 5e.** Stub implementations for `agent`, `mcp`, and `hook` participant types. Return clear "not yet implemented" errors. Define interfaces for future v2 implementation.
+**Phase 5e.** Stub implementations for `mcp` and `hook` participant types. Return clear "not yet implemented" errors. Define interfaces for future v2 implementation.
 
 Dependencies: #6.
 

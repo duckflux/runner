@@ -2,6 +2,7 @@ package cel
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/duckflux/runner/internal/model"
 )
@@ -27,13 +28,19 @@ func (e *Environment) PrecompileWorkflow(wf *model.Workflow) error {
 				return err
 			}
 		}
+		if p.Type == model.ParticipantTypeEmit {
+			base := fmt.Sprintf("/participants/%s/payload", name)
+			if err := precompileMaybeCEL(e, p.Payload, base); err != nil {
+				return err
+			}
+		}
 	}
 
 	if wf.Defaults != nil {
 		precompileMaybeCELString(e, wf.Defaults.CWD)
 	}
 
-	if err := precompileFlowSteps(e, wf.Flow, "flow"); err != nil {
+	if err := precompileFlowSteps(e, wf.Flow, "flow", ""); err != nil {
 		return err
 	}
 
@@ -48,44 +55,92 @@ func (e *Environment) PrecompileWorkflow(wf *model.Workflow) error {
 				return fmt.Errorf("precompiling /output/%s: %w", field, err)
 			}
 		}
+		for field, expr := range wf.Output.MapField {
+			if _, err := e.Compile(expr); err != nil {
+				return fmt.Errorf("precompiling /output/map/%s: %w", field, err)
+			}
+		}
 	}
 
 	return nil
 }
 
-func precompileFlowSteps(e *Environment, steps []model.FlowStep, path string) error {
+func precompileFlowSteps(e *Environment, steps []model.FlowStep, path string, loopAlias string) error {
 	for i, step := range steps {
 		stepPath := fmt.Sprintf("%s[%d]", path, i)
 		switch {
 		case step.Override != nil:
 			if step.Override.When != "" {
-				if _, err := e.Compile(step.Override.When); err != nil {
+				if _, err := e.Compile(rewriteLoopAlias(step.Override.When, loopAlias)); err != nil {
 					return fmt.Errorf("precompiling %s.when: %w", stepPath, err)
 				}
 			}
-			if err := precompileInputStrict(e, step.Override.Input, stepPath+".input"); err != nil {
+			if err := precompileInputStrict(e, rewriteInInterface(step.Override.Input, loopAlias), stepPath+".input"); err != nil {
 				return err
 			}
 		case step.Loop != nil:
 			if step.Loop.Until != "" {
-				if _, err := e.Compile(step.Loop.Until); err != nil {
+				alias := loopAlias
+				if step.Loop.As != "" {
+					alias = step.Loop.As
+				}
+				if _, err := e.Compile(rewriteLoopAlias(step.Loop.Until, alias)); err != nil {
 					return fmt.Errorf("precompiling %s.loop.until: %w", stepPath, err)
 				}
 			}
-			if err := precompileFlowSteps(e, step.Loop.Steps, stepPath+".loop.steps"); err != nil {
+			if maxExpr, ok := step.Loop.Max.(string); ok {
+				alias := loopAlias
+				if step.Loop.As != "" {
+					alias = step.Loop.As
+				}
+				if _, err := e.Compile(rewriteLoopAlias(maxExpr, alias)); err != nil {
+					return fmt.Errorf("precompiling %s.loop.max: %w", stepPath, err)
+				}
+			}
+			bodyAlias := loopAlias
+			if step.Loop.As != "" {
+				bodyAlias = step.Loop.As
+			}
+			if err := precompileFlowSteps(e, step.Loop.Steps, stepPath+".loop.steps", bodyAlias); err != nil {
 				return err
 			}
 		case step.If != nil:
 			if step.If.Condition != "" {
-				if _, err := e.Compile(step.If.Condition); err != nil {
+				if _, err := e.Compile(rewriteLoopAlias(step.If.Condition, loopAlias)); err != nil {
 					return fmt.Errorf("precompiling %s.if: %w", stepPath, err)
 				}
 			}
-			if err := precompileFlowSteps(e, step.If.Then, stepPath+".then"); err != nil {
+			if err := precompileFlowSteps(e, step.If.Then, stepPath+".then", loopAlias); err != nil {
 				return err
 			}
-			if err := precompileFlowSteps(e, step.If.Else, stepPath+".else"); err != nil {
+			if err := precompileFlowSteps(e, step.If.Else, stepPath+".else", loopAlias); err != nil {
 				return err
+			}
+		case step.Wait != nil:
+			if step.Wait.Until != "" {
+				if _, err := e.Compile(rewriteLoopAlias(step.Wait.Until, loopAlias)); err != nil {
+					return fmt.Errorf("precompiling %s.wait.until: %w", stepPath, err)
+				}
+			}
+			if step.Wait.Match != "" {
+				if _, err := e.Compile(rewriteLoopAlias(step.Wait.Match, loopAlias)); err != nil {
+					return fmt.Errorf("precompiling %s.wait.match: %w", stepPath, err)
+				}
+			}
+		case step.InlineParticipant != nil:
+			p := step.InlineParticipant
+			if p.When != "" {
+				if _, err := e.Compile(rewriteLoopAlias(p.When, loopAlias)); err != nil {
+					return fmt.Errorf("precompiling %s.when: %w", stepPath, err)
+				}
+			}
+			if err := precompileInputStrict(e, rewriteInInterface(p.Input, loopAlias), stepPath+".input"); err != nil {
+				return err
+			}
+			if p.Type == model.ParticipantTypeEmit {
+				if err := precompileMaybeCEL(e, rewriteInInterface(p.Payload, loopAlias), stepPath+".payload"); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -133,4 +188,32 @@ func precompileMaybeCEL(e *Environment, raw any, path string) error {
 		}
 	}
 	return nil
+}
+
+func rewriteLoopAlias(expr string, alias string) string {
+	if alias == "" || alias == "loop" {
+		return expr
+	}
+	return strings.ReplaceAll(expr, alias+".", "loop.")
+}
+
+func rewriteInInterface(raw any, alias string) any {
+	switch v := raw.(type) {
+	case string:
+		return rewriteLoopAlias(v, alias)
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(v))
+		for k, val := range v {
+			out[k] = rewriteInInterface(val, alias)
+		}
+		return out
+	case []interface{}:
+		out := make([]interface{}, len(v))
+		for i, val := range v {
+			out[i] = rewriteInInterface(val, alias)
+		}
+		return out
+	default:
+		return raw
+	}
 }

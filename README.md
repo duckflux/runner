@@ -159,11 +159,9 @@ Participants are named steps that can be referenced in the flow. Each has a `typ
 |------|-------------|--------|
 | `exec` | Shell command execution | ✅ Implemented |
 | `http` | HTTP request | ✅ Implemented |
-| `human` | Interactive prompt (stdin/stdout) | ✅ Implemented |
 | `workflow` | Sub-workflow composition | ✅ Implemented |
-| `agent` | LLM-powered autonomous agent | 🔜 Stub (v2) |
-| `mcp` | MCP server delegation | 🔜 Stub (v2) |
-| `hook` | External event gateway | 🔜 Stub (v2) |
+| `mcp` | MCP server delegation (`tool` field replaces `operation`) | 🔜 Stub (v2) |
+| `emit` | Publish an event to the event hub (v1: logged/stubbed) | 🔜 Stub (v1) |
 
 ### Flow Control
 
@@ -174,6 +172,13 @@ Participants are named steps that can be referenced in the flow. Each has a `typ
 | `parallel` | Run steps concurrently |
 | `if/then/else` | Conditional branching |
 | `when` | Guard condition on a single step |
+
+Note (spec v0.2):
+
+- The `wait` construct is available to pause execution until an event, a timeout, or a polling condition is met.
+- Inline participants are supported: a `flow` step can contain an inline participant definition instead of referencing the top-level `participants:` map.
+- `loop` supports the `as` field to rename the loop context (for example `as: attempt` exposes `attempt.index`). The runner rewrites the context for CEL expressions.
+- `if` is now an object with a `condition` field: `if: { condition: "expr", then: [...], else: [...] }`.
 
 ### Error Handling
 
@@ -302,6 +307,33 @@ flow:
 
 ```bash
 duckflux run examples/parallel.flow.yaml
+```
+
+### Inline participant example
+
+Inline participants allow defining a participant directly inside the `flow` without adding it to the top-level `participants` map:
+
+```yaml
+flow:
+  - myInlineStep:
+    type: exec
+    run: echo "inline participant"
+
+# This runs the inline exec once and doesn't require a named participant entry
+```
+
+### Wait example
+
+The `wait` step supports simple timeouts, event matching (stubbed in v1), and polling. Examples:
+
+```yaml
+- wait:
+  timeout: 30s
+
+# event-based (stubbed in v1):
+- wait:
+  event: my-event
+  match: "payload.type == 'ready'"
 ```
 
 ### Code Review Pipeline

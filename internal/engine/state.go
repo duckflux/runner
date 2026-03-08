@@ -3,6 +3,7 @@ package engine
 import (
 	"crypto/rand"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/duckflux/runner/internal/cel"
@@ -26,11 +27,15 @@ func NewState(wf *model.Workflow, inputs map[string]any, env map[string]string) 
 	if env == nil {
 		env = map[string]string{}
 	}
-	return &cel.State{
+	ver := ""
+	if wf.Version != nil {
+		ver = fmt.Sprint(wf.Version)
+	}
+	s := &cel.State{
 		Workflow: cel.WorkflowMeta{
 			ID:      wf.ID,
 			Name:    wf.Name,
-			Version: wf.Version,
+			Version: ver,
 		},
 		Execution: cel.ExecutionMeta{
 			ID:        newExecutionID(),
@@ -43,6 +48,40 @@ func NewState(wf *model.Workflow, inputs map[string]any, env map[string]string) 
 		Env:   env,
 		Steps: make(map[string]*cel.StepResult),
 	}
+	if cwd, err := os.Getwd(); err == nil {
+		s.Execution.CWD = cwd
+		s.Execution.Context["cwd"] = cwd
+	}
+
+	// Populate Steps map with placeholders for inline participants so that
+	// they exist in the state once executed. Traverse the flow to find any
+	// inline participant definitions with an `as` name.
+	var walk func([]model.FlowStep)
+	walk = func(steps []model.FlowStep) {
+		for _, st := range steps {
+			if st.InlineParticipant != nil && st.InlineParticipant.As != "" {
+				if _, ok := s.Steps[st.InlineParticipant.As]; !ok {
+					s.Steps[st.InlineParticipant.As] = &cel.StepResult{}
+				}
+			}
+			if st.Loop != nil {
+				walk(st.Loop.Steps)
+			}
+			if st.Parallel != nil {
+				walk(st.Parallel.Steps)
+			}
+			if st.If != nil {
+				walk(st.If.Then)
+				walk(st.If.Else)
+			}
+			if st.Override != nil {
+				// override participants refer to named participants; no-op
+			}
+		}
+	}
+	walk(wf.Flow)
+
+	return s
 }
 
 // newExecutionID generates a random UUID-style execution identifier using

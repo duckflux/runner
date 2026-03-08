@@ -68,7 +68,7 @@ The libraries needed for a duckflux runner all exist and are mature in Go:
 
 ### 6. Precedent
 
-Virtually every tool in the workflow and infrastructure space is written in Go: Argo Workflows, Temporal (server + workers), Docker, Kubernetes, Terraform, Consul, Vault, Prometheus, Grafana Agent, Traefik. This isn't coincidence — the language's strengths (static binary, concurrency, fast compilation, stdlib) align perfectly with infrastructure tooling requirements.
+Virtually every tool in the workflow and infrastructure space is written in Go: Argo Workflows, Temporal (server + workers), Docker, Kubernetes, Terraform, Consul, Vault, Prometheus, Grafana Alloy, Traefik. This isn't coincidence — the language's strengths (static binary, concurrency, fast compilation, stdlib) align perfectly with infrastructure tooling requirements.
 
 Building duckflux in Go means it fits naturally into the ecosystem where it will be used.
 
@@ -92,10 +92,8 @@ duckflux/
 │   │   └── timeout.go    #   Timeout propagation and precedence
 │   └── participant/      # Participant interface + type implementations
 │       ├── interface.go  #   type Participant interface { Execute(ctx, input) (output, error) }
-│       ├── agent.go      #   Agent participant (LLM + tools)
 │       ├── exec.go       #   Shell command execution
 │       ├── http.go       #   HTTP request
-│       ├── human.go      #   Human input gate
 │       ├── mcp.go        #   MCP server delegation
 │       └── workflow.go   #   Sub-workflow composition
 ├── schema/
