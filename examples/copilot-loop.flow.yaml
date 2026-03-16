@@ -1,0 +1,15 @@
+id: copilot-loop
+name: Copilot CLI Loop Example
+version: "1"
+
+participants:
+  copilot:
+    type: exec
+    run: copilot -p "$(cat examples/prompt.txt)"
+    timeout: 30s
+
+flow:
+  - loop:
+      max: 5
+      steps:
+        - copilot

@@ -1,0 +1,17 @@
+id: emit-wait-example
+name: Emit and Wait Example
+version: "1"
+
+participants:
+  notifier:
+    type: emit
+    event: example.notify
+    payload:
+      message: "hello"
+
+flow:
+  - wait:
+      timeout: 10ms
+  - notifier
+
+output: notifier.output.event

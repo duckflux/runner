@@ -1,0 +1,87 @@
+id: code-review
+name: Code Review Pipeline
+version: "1"
+
+defaults:
+  timeout: 5m
+
+inputs:
+  branch:
+    type: string
+    default: "main"
+    description: "Branch to review"
+  max_rounds:
+    type: integer
+    default: 3
+    description: "Maximum review iterations"
+
+participants:
+  coder:
+    type: exec
+    run: echo '{"status":"coded","branch":"'"${BRANCH:-main}"'"}'
+    timeout: 30s
+    onError: retry
+    retry:
+      max: 2
+      backoff: 1s
+
+  reviewer:
+    type: exec
+    run: |
+      echo '{"approved":true,"score":8,"comments":"Looks good"}'
+    timeout: 30s
+    onError: fail
+
+  tests:
+    type: exec
+    run: echo "tests passed"
+    timeout: 30s
+    onError: skip
+
+  lint:
+    type: exec
+    run: echo "lint passed"
+    timeout: 30s
+    onError: skip
+
+  notify_success:
+    type: http
+    url: http://localhost:0
+    method: POST
+    timeout: 10s
+    onError: skip
+
+  notify_failure:
+    type: http
+    url: http://localhost:0
+    method: POST
+    timeout: 10s
+    onError: skip
+
+flow:
+  - coder
+
+  - loop:
+      until: reviewer.output.approved == true
+      max: 3
+      steps:
+        - reviewer
+        - coder:
+            when: reviewer.output.approved == false
+
+  - parallel:
+      - tests
+      - lint
+
+  - if:
+      condition: 'tests.status == "success" && lint.status == "success"'
+      then:
+        - notify_success
+      else:
+        - notify_failure
+
+output:
+  approved: reviewer.output.approved
+  score: reviewer.output.score
+  testResult: tests.status
+  lintResult: lint.status

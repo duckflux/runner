@@ -1,0 +1,10 @@
+id: inline-example
+name: Inline Participant Example
+version: "1"
+
+flow:
+  - type: exec
+    as: inline
+    run: echo "inline example"
+
+output: inline.output
