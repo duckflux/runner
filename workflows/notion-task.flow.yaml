@@ -1,0 +1,165 @@
+id: notion-task-workflow
+name: Notion Task Workflow
+version: "1"
+
+# Uso:
+#   export NOTION_API_TOKEN=ntn_xxx
+#   quack run workflows/notion-task.flow.yaml --input story_id=<uuid>
+
+defaults:
+  timeout: 15m
+
+inputs:
+  story_id:
+    type: string
+    description: "ID da story no Notion (UUID)"
+
+participants:
+  # ── 1. Escreve STORY.md ────────────────────────────────────────────────────
+  write_story:
+    type: exec
+    input: 'input["story_id"]'
+    run: |
+      STORY_ID=$(cat | tr -d '[:space:]')
+      NOTION_MARKUP=/home/reksai/.volta/tools/image/packages/notion-markup/lib/node_modules/notion-markup/dist/index.mjs
+
+      PAGE=$(ntn api /v1/pages/${STORY_ID})
+
+      TITLE=$(echo "$PAGE" | jq -r '
+        .properties | to_entries[]
+        | select(.value.type == "title")
+        | .value.title[0].plain_text
+      ' | head -1)
+
+      SHORT_ID=$(echo "$PAGE" | jq -r '
+        .properties | to_entries[]
+        | select(.value.type == "unique_id")
+        | (.value.unique_id.prefix + "-" + (.value.unique_id.number | tostring))
+      ' | head -1)
+
+      printf '# %s\n\n' "$TITLE" > STORY.md
+      ntn api /v1/blocks/${STORY_ID}/children | node --input-type=module -e "
+        import { notionToMarkdown } from '${NOTION_MARKUP}';
+        let d = '';
+        process.stdin.on('data', c => d += c);
+        process.stdin.on('end', async () => {
+          const md = await notionToMarkdown(JSON.parse(d).results);
+          process.stdout.write(md);
+        });
+      " >> STORY.md
+
+      printf '{"title":%s,"short_id":%s}' \
+        "$(printf '%s' "$TITLE" | jq -Rs .)" \
+        "$(printf '%s' "$SHORT_ID" | jq -Rs .)"
+    timeout: 30s
+
+  # ── 2. Busca a primeira task em aberto e escreve TASK.md ───────────────────
+  write_task:
+    type: exec
+    input: 'input["story_id"]'
+    run: |
+      STORY_ID=$(cat | tr -d '[:space:]')
+      NOTION_MARKUP=/home/reksai/.volta/tools/image/packages/notion-markup/lib/node_modules/notion-markup/dist/index.mjs
+
+      TASK_IDS=$(ntn api /v1/pages/${STORY_ID} | jq -r '
+        .properties | to_entries[]
+        | select(.key == "Sub-item")
+        | .value.relation[].id
+      ')
+
+      TASK_ID=""
+      TASK_TITLE=""
+      TASK_SHORT_ID=""
+      for ID in $TASK_IDS; do
+        PAGE=$(ntn api /v1/pages/${ID})
+        STATUS=$(echo "$PAGE" | jq -r '
+          .properties | to_entries[]
+          | select(.value.type == "status")
+          | .value.status.name
+        ' | head -1 | tr '[:upper:]' '[:lower:]')
+        if [ "$STATUS" != "done" ] && [ "$STATUS" != "concluído" ] && [ "$STATUS" != "concluido" ]; then
+          TASK_ID=$ID
+          TASK_TITLE=$(echo "$PAGE" | jq -r '
+            .properties | to_entries[]
+            | select(.value.type == "title")
+            | .value.title[0].plain_text
+          ' | head -1)
+          TASK_SHORT_ID=$(echo "$PAGE" | jq -r '
+            .properties | to_entries[]
+            | select(.value.type == "unique_id")
+            | (.value.unique_id.prefix + "-" + (.value.unique_id.number | tostring))
+          ' | head -1)
+          break
+        fi
+      done
+
+      if [ -z "$TASK_ID" ]; then
+        echo "Nenhuma task em aberto encontrada na story." >&2
+        exit 1
+      fi
+
+      printf '# %s\n\n' "$TASK_TITLE" > TASK.md
+      ntn api /v1/blocks/${TASK_ID}/children | node --input-type=module -e "
+        import { notionToMarkdown } from '${NOTION_MARKUP}';
+        let d = '';
+        process.stdin.on('data', c => d += c);
+        process.stdin.on('end', async () => {
+          const md = await notionToMarkdown(JSON.parse(d).results);
+          process.stdout.write(md);
+        });
+      " >> TASK.md
+
+      printf '{"title":%s,"short_id":%s}' \
+        "$(printf '%s' "$TASK_TITLE" | jq -Rs .)" \
+        "$(printf '%s' "$TASK_SHORT_ID" | jq -Rs .)"
+    timeout: 60s
+
+  # ── 3. Cria branch story/{AG-19}/task/{AG-5} ──────────────────────────────
+  git_checkout:
+    type: exec
+    input:
+      story_id: 'write_story.output["short_id"]'
+      task_id: 'write_task.output["short_id"]'
+    run: |
+      DATA=$(cat)
+      BRANCH="story/$(echo "$DATA" | jq -r '.story_id')/task/$(echo "$DATA" | jq -r '.task_id')"
+      git checkout -b "$BRANCH" 2>/dev/null || git checkout "$BRANCH"
+      printf '{"branch":"%s"}' "$BRANCH"
+    timeout: 30s
+
+  # ── 4. Chama o Copilot ─────────────────────────────────────────────────────
+  run_copilot:
+    type: exec
+    run: |
+      copilot --allow-all-tools -p "You are working now to complete a single task from a story. WORK on the task specified in the TASK.md file. USE as your context the STORY.md file. FOLLOW the task requirements strictly. After coding, RUN all the existing tests plus any other you've created. DO NOT ASK for user answers, because you are in a detached session (headless). When dealing with ambiguous issues, take the simpler path. STOP only when you have completed the entire task with all the requirements. I therefore authorize automatic executions of any tool and any command necessary to complete the task. DO NOT INTERRUPT your work."
+    timeout: 10m
+
+  # ── 5. Salva WORKLOG.md ────────────────────────────────────────────────────
+  write_worklog:
+    type: exec
+    input: 'run_copilot.output'
+    run: cat > WORKLOG.md
+    timeout: 10s
+
+  # ── 6. Commit na branch ────────────────────────────────────────────────────
+  git_commit:
+    type: exec
+    input: 'write_task.output["title"]'
+    run: |
+      TASK_TITLE=$(cat)
+      git add -A
+      git commit -m "worklog: ${TASK_TITLE}"
+    timeout: 30s
+
+flow:
+  - write_story
+  - write_task
+  - git_checkout
+  - run_copilot
+  - write_worklog
+  - git_commit
+
+output:
+  branch: 'git_checkout.output["branch"]'
+  task: 'write_task.output["title"]'
+  story: 'write_story.output["title"]'
