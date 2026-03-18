@@ -173,10 +173,15 @@ Participants are named steps that can be referenced in the flow. Each has a `typ
 | `if/then/else` | Conditional branching |
 | `when` | Guard condition on a single step |
 
-Note (spec v0.2):
+Note (spec v0.3):
 
+- **Implicit I/O chain**: The output of step N automatically becomes the input of step N+1. When no explicit `output:` is defined, the workflow returns the final chain value.
+- **Variable namespaces**: Workflow-level inputs are accessed via `workflow.inputs.*`. Inside a participant step, `input` refers to the participant's scoped input (chain + explicit merge) and `output` refers to the participant's output.
+- **Anonymous inline participants**: Flow steps can define `type` without `as` — they execute normally and contribute to the chain without a named binding.
+- **Chain merge rules**: When a step has both chain input and explicit `input:`, maps are merged (explicit wins on key conflict); for other types, explicit always wins.
+- **Parallel chain output**: After a `parallel` block, the chain value is an ordered array of each branch's final output.
 - The `wait` construct is available to pause execution until an event, a timeout, or a polling condition is met.
-- Inline participants are supported: a `flow` step can contain an inline participant definition instead of referencing the top-level `participants:` map.
+- Inline participants are supported: a `flow` step can contain an inline participant definition instead of referencing the top-level `participants:` map. Named inline `as` values must be globally unique.
 - `loop` supports the `as` field to rename the loop context (for example `as: attempt` exposes `attempt.index`). The runner rewrites the context for CEL expressions.
 - `if` is now an object with a `condition` field: `if: { condition: "expr", then: [...], else: [...] }`.
 

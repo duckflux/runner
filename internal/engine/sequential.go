@@ -30,91 +30,103 @@ func withStepTimeout(ctx context.Context, def model.Participant, override *model
 }
 
 // runSequential iterates over a slice of flow steps, executing each in order.
-// It returns the name of the last participant step that was executed (not skipped),
-// which is used to derive the implicit workflow output when no explicit output is
-// defined. An error from any step aborts execution immediately.
-func runSequential(ctx context.Context, wf *model.Workflow, steps []model.FlowStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry) (string, error) {
+// It propagates a chain value between steps: the output of step N becomes the
+// implicit input of step N+1. It returns the final chain value and the name of
+// the last participant step that was executed (not skipped).
+func runSequential(ctx context.Context, wf *model.Workflow, steps []model.FlowStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry, chain any) (string, any, error) {
 	var lastStep string
 	for _, step := range steps {
-		name, err := runFlowStep(ctx, wf, step, state, celEnv, reg)
+		name, newChain, err := runFlowStep(ctx, wf, step, state, celEnv, reg, chain)
 		if err != nil {
-			return "", err
+			return "", nil, err
+		}
+		if newChain != nil || name != "" {
+			chain = newChain
 		}
 		if name != "" {
 			lastStep = name
 		}
 	}
-	return lastStep, nil
+	return lastStep, chain, nil
 }
 
 // runFlowStep dispatches a single flow step to its appropriate handler and
-// returns the participant name that was executed (empty for control-flow steps).
-func runFlowStep(ctx context.Context, wf *model.Workflow, step model.FlowStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry) (string, error) {
+// returns the participant name that was executed (empty for control-flow steps),
+// and the new chain value (output of the step).
+func runFlowStep(ctx context.Context, wf *model.Workflow, step model.FlowStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry, chain any) (string, any, error) {
 	switch {
 	case step.Participant != "":
-		if err := runParticipantStep(ctx, wf, step.Participant, nil, state, celEnv, reg); err != nil {
-			return "", err
+		out, err := runParticipantStep(ctx, wf, step.Participant, nil, state, celEnv, reg, chain)
+		if err != nil {
+			return "", nil, err
 		}
-		return step.Participant, nil
+		return step.Participant, out, nil
 
 	case step.Override != nil:
 		name := step.Override.Participant
-		if err := runParticipantStep(ctx, wf, name, step.Override, state, celEnv, reg); err != nil {
-			return "", err
+		out, err := runParticipantStep(ctx, wf, name, step.Override, state, celEnv, reg, chain)
+		if err != nil {
+			return "", nil, err
 		}
-		return name, nil
+		return name, out, nil
 
 	case step.Loop != nil:
-		if err := runLoop(ctx, wf, step.Loop, state, celEnv, reg); err != nil {
-			return "", err
+		loopChain, err := runLoop(ctx, wf, step.Loop, state, celEnv, reg, chain)
+		if err != nil {
+			return "", nil, err
 		}
-		return "", nil
+		return "", loopChain, nil
 
 	case step.Parallel != nil:
-		if err := runParallel(ctx, wf, step.Parallel, state, celEnv, reg); err != nil {
-			return "", err
+		parallelOut, err := runParallel(ctx, wf, step.Parallel, state, celEnv, reg, chain)
+		if err != nil {
+			return "", nil, err
 		}
-		return "", nil
+		return "", parallelOut, nil
 
 	case step.If != nil:
-		return runIf(ctx, wf, step.If, state, celEnv, reg)
+		return runIf(ctx, wf, step.If, state, celEnv, reg, chain)
 
 	case step.Wait != nil:
 		if err := runWait(ctx, wf, step.Wait, state, celEnv, reg); err != nil {
-			return "", err
+			return "", nil, err
 		}
-		return "", nil
+		// wait does not produce output; chain unchanged
+		return "", chain, nil
 
 	case step.InlineParticipant != nil:
-		// Execute inline participant definition.
 		def := *step.InlineParticipant
-		if def.As == "" {
-			return "", fmt.Errorf("inline participant missing 'as' name")
+		out, err := runInlineParticipant(ctx, wf, &def, state, celEnv, reg, chain)
+		if err != nil {
+			return "", nil, err
 		}
-		if err := runInlineParticipant(ctx, wf, &def, state, celEnv, reg); err != nil {
-			return "", err
-		}
-		return def.As, nil
+		name := def.As // may be empty for anonymous
+		return name, out, nil
 
 	default:
-		return "", fmt.Errorf("unsupported flow step type")
+		return "", nil, fmt.Errorf("unsupported flow step type")
 	}
 }
 
 // runParticipantStep resolves the participant definition, evaluates its input
 // expressions, invokes Execute, and stores the result in state.Steps.
-func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, override *model.ParticipantOverrideStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry) error {
+// chain is the implicit I/O chain value from the previous step.
+// Returns the step output (for chain propagation) and any error.
+func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, override *model.ParticipantOverrideStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry, chain any) (any, error) {
 	def, ok := wf.Participants[name]
 	if !ok {
-		return fmt.Errorf("participant %q not found in workflow definition", name)
+		return nil, fmt.Errorf("participant %q not found in workflow definition", name)
 	}
 	p, ok := reg[name]
 	if !ok {
-		return fmt.Errorf("participant %q has no registered implementation", name)
+		return nil, fmt.Errorf("participant %q has no registered implementation", name)
 	}
 
 	// Inject current timestamp for CEL expressions.
 	state.Now = time.Now().UTC()
+
+	// Set CurrentInput to chain so that `when` guard can access it via `input`.
+	state.CurrentInput = chain
 
 	// Evaluate the "when" guard, if present. A false result skips this step.
 	when := ""
@@ -124,19 +136,20 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 	if when != "" {
 		prog, err := celEnv.Compile(when)
 		if err != nil {
-			return fmt.Errorf("participant %q: compiling when guard: %w", name, err)
+			return nil, fmt.Errorf("participant %q: compiling when guard: %w", name, err)
 		}
 		result, err := celEnv.Eval(prog, state)
 		if err != nil {
-			return fmt.Errorf("participant %q: evaluating when guard: %w", name, err)
+			return nil, fmt.Errorf("participant %q: evaluating when guard: %w", name, err)
 		}
 		cond, ok := result.(bool)
 		if !ok {
-			return fmt.Errorf("participant %q: when guard must evaluate to bool, got %T", name, result)
+			return nil, fmt.Errorf("participant %q: when guard must evaluate to bool, got %T", name, result)
 		}
 		if !cond {
 			state.SetStep(name, &cel.StepResult{Status: "skipped"})
-			return nil
+			// Skipped step: chain unchanged (return nil to signal no new chain)
+			return nil, nil
 		}
 	}
 
@@ -150,10 +163,19 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 	var effectiveCWD string
 
 	// Evaluate input CEL expressions to produce the concrete input value.
-	input, err := evalInput(rawInput, state, celEnv)
+	explicitInput, err := evalInput(rawInput, state, celEnv)
 	if err != nil {
-		return fmt.Errorf("participant %q: evaluating input: %w", name, err)
+		return nil, fmt.Errorf("participant %q: evaluating input: %w", name, err)
 	}
+
+	// Merge chain input with explicit input per v0.3 spec.
+	input, err := mergeChainedInput(chain, explicitInput)
+	if err != nil {
+		return nil, fmt.Errorf("participant %q: merging chain input: %w", name, err)
+	}
+
+	// Set participant-scoped input for CEL expressions during execution.
+	state.CurrentInput = input
 
 	// Resolve runtime participant fields for types that support dynamic values.
 	execParticipant := p
@@ -163,7 +185,7 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 	case model.ParticipantTypeHTTP:
 		resolvedDef, err := resolveHTTPDefinition(def, state, celEnv)
 		if err != nil {
-			return fmt.Errorf("participant %q: resolving http fields: %w", name, err)
+			return nil, fmt.Errorf("participant %q: resolving http fields: %w", name, err)
 		}
 		if hp, ok := p.(*participant.HTTPParticipant); ok {
 			execParticipant = hp.WithDefinition(resolvedDef)
@@ -174,7 +196,7 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 		if ep, ok := p.(*participant.ExecParticipant); ok {
 			resolvedDef, err := resolveExecDefinition(ctx, def, wf, state, celEnv)
 			if err != nil {
-				return fmt.Errorf("participant %q: resolving exec fields: %w", name, err)
+				return nil, fmt.Errorf("participant %q: resolving exec fields: %w", name, err)
 			}
 			execParticipant = ep.WithDefinition(resolvedDef)
 			// capture effective CWD for recording in the step result
@@ -189,7 +211,7 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 	case model.ParticipantTypeEmit:
 		resolvedDef, err := resolveEmitDefinition(def, state, celEnv)
 		if err != nil {
-			return fmt.Errorf("participant %q: resolving emit payload: %w", name, err)
+			return nil, fmt.Errorf("participant %q: resolving emit payload: %w", name, err)
 		}
 		emitEventName = resolvedDef.Event
 		emitPayload = resolvedDef.Payload
@@ -235,7 +257,8 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 				Duration:   durationStr,
 				Error:      execErr.Error(),
 			})
-			return nil
+			// Skipped on error: chain unchanged (return nil to signal no new chain)
+			return nil, nil
 		case "retry":
 			state.SetStep(name, &cel.StepResult{
 				Status:     "failed",
@@ -246,7 +269,7 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 				Error:      execErr.Error(),
 				CWD:        effectiveCWD,
 			})
-			return fmt.Errorf("participant %q failed after %d retries: %w", name, retries, execErr)
+			return nil, fmt.Errorf("participant %q failed after %d retries: %w", name, retries, execErr)
 		case "fail":
 			state.SetStep(name, &cel.StepResult{
 				Status:     "failed",
@@ -256,7 +279,7 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 				Error:      execErr.Error(),
 				CWD:        effectiveCWD,
 			})
-			return fmt.Errorf("participant %q failed: %w", name, execErr)
+			return nil, fmt.Errorf("participant %q failed: %w", name, execErr)
 		default:
 			// onErr is a participant name — execute it as a fallback (redirect).
 			// Force onError="fail" for the fallback to prevent infinite redirect chains.
@@ -269,15 +292,18 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 				CWD:        effectiveCWD,
 			})
 			fallbackOverride := &model.ParticipantOverrideStep{OnError: "fail"}
-			if redirectErr := runParticipantStep(ctx, wf, onErr, fallbackOverride, state, celEnv, reg); redirectErr != nil {
-				return fmt.Errorf("participant %q failed and fallback %q also failed: %w", name, onErr, redirectErr)
+			if _, redirectErr := runParticipantStep(ctx, wf, onErr, fallbackOverride, state, celEnv, reg, chain); redirectErr != nil {
+				return nil, fmt.Errorf("participant %q failed and fallback %q also failed: %w", name, onErr, redirectErr)
 			}
-			return nil
+			return nil, nil
 		}
 	}
 
 	// Apply JSON auto-detection: attempt to parse string outputs as JSON.
 	out = autoDetectJSON(out)
+
+	// Set participant-scoped output for CEL expressions.
+	state.CurrentOutput = out
 
 	slog.Debug("step completed", "participant", name, "status", "success", "duration", durationStr)
 	state.SetStep(name, &cel.StepResult{
@@ -292,17 +318,78 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 	if emitEventName != "" {
 		state.PublishEvent(emitEventName, emitPayload)
 	}
-	return nil
+	return out, nil
 }
 
-// runInlineParticipant executes an inline participant definition. The provided
-// def must include an `As` name which will be used to record the step result
-// in the execution state.
-func runInlineParticipant(ctx context.Context, wf *model.Workflow, def *model.Participant, state *cel.State, celEnv *cel.Environment, reg participant.Registry) error {
-	override := &model.ParticipantOverrideStep{
-		When: def.When,
+// runInlineParticipant executes an inline participant definition. If `As` is
+// set, the step result is stored under that name. For anonymous inline
+// participants (no `As`), the step runs and contributes to the chain but does
+// not create a named binding.
+func runInlineParticipant(ctx context.Context, wf *model.Workflow, def *model.Participant, state *cel.State, celEnv *cel.Environment, reg participant.Registry, chain any) (any, error) {
+	if def.As != "" {
+		// Named inline: delegate to runParticipantStep via the synthetic name.
+		override := &model.ParticipantOverrideStep{
+			When: def.When,
+		}
+		return runParticipantStep(ctx, wf, def.As, override, state, celEnv, reg, chain)
 	}
-	return runParticipantStep(ctx, wf, def.As, override, state, celEnv, reg)
+
+	// Anonymous inline: build a one-off participant and execute directly.
+	p, err := participant.BuildOne(*def, state.Env, nil)
+	if err != nil {
+		return nil, fmt.Errorf("building anonymous inline participant: %w", err)
+	}
+
+	state.Now = time.Now().UTC()
+	state.CurrentInput = chain
+
+	// Evaluate when guard if present.
+	if def.When != "" {
+		prog, err := celEnv.Compile(def.When)
+		if err != nil {
+			return nil, fmt.Errorf("anonymous inline: compiling when guard: %w", err)
+		}
+		result, err := celEnv.Eval(prog, state)
+		if err != nil {
+			return nil, fmt.Errorf("anonymous inline: evaluating when guard: %w", err)
+		}
+		cond, ok := result.(bool)
+		if !ok {
+			return nil, fmt.Errorf("anonymous inline: when guard must evaluate to bool, got %T", result)
+		}
+		if !cond {
+			return nil, nil // skipped: chain unchanged
+		}
+	}
+
+	// Evaluate explicit input and merge with chain.
+	explicitInput, err := evalInput(def.Input, state, celEnv)
+	if err != nil {
+		return nil, fmt.Errorf("anonymous inline: evaluating input: %w", err)
+	}
+	input, err := mergeChainedInput(chain, explicitInput)
+	if err != nil {
+		return nil, fmt.Errorf("anonymous inline: merging chain input: %w", err)
+	}
+	state.CurrentInput = input
+
+	// Resolve exec CWD if needed.
+	if def.Type == model.ParticipantTypeExec && def.CWD != "" {
+		resolvedDef, err := resolveExecDefinition(ctx, *def, wf, state, celEnv)
+		if err != nil {
+			return nil, fmt.Errorf("anonymous inline: resolving exec fields: %w", err)
+		}
+		p = participant.NewExec(resolvedDef, state.Env)
+	}
+
+	out, err := p.Execute(ctx, input)
+	if err != nil {
+		return nil, fmt.Errorf("anonymous inline: execution failed: %w", err)
+	}
+
+	out = autoDetectJSON(out)
+	state.CurrentOutput = out
+	return out, nil
 }
 
 // resolveOnError returns the effective onError strategy for a step invocation.
@@ -544,9 +631,12 @@ func autoDetectJSON(v any) any {
 // Priority:
 //  1. Explicit output expression   → evaluate CEL, return result.
 //  2. Explicit output map          → evaluate each CEL expression, return map.
-//  3. No explicit output           → return the last executed step's output.
-func resolveOutput(output *model.WorkflowOutput, state *cel.State, env *cel.Environment, lastStep string) (any, error) {
+//  3. No explicit output           → return the final chain value (v0.3), falling back to last step output.
+func resolveOutput(output *model.WorkflowOutput, state *cel.State, env *cel.Environment, lastStep string, finalChain any) (any, error) {
 	if output == nil {
+		if finalChain != nil {
+			return finalChain, nil
+		}
 		return stepOutput(state, lastStep), nil
 	}
 

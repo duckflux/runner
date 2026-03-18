@@ -128,7 +128,7 @@ func handleWaitTimeout(ctx context.Context, wf *model.Workflow, step *model.Wait
 	case "skip":
 		return nil
 	default:
-		if err := runParticipantStep(ctx, wf, step.OnTimeout, &model.ParticipantOverrideStep{OnError: "fail"}, state, celEnv, reg); err != nil {
+		if _, err := runParticipantStep(ctx, wf, step.OnTimeout, &model.ParticipantOverrideStep{OnError: "fail"}, state, celEnv, reg, nil); err != nil {
 			return fmt.Errorf("wait: onTimeout redirect failed: %w", err)
 		}
 		return nil

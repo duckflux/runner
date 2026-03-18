@@ -38,8 +38,8 @@ func Run(ctx context.Context, wf *model.Workflow, inputs map[string]any, env map
 		state.Execution.Context["cwd"] = base
 	}
 
-	// Execute all top-level flow steps sequentially.
-	lastStep, err := runSequential(ctx, wf, wf.Flow, state, celEnv, reg)
+	// Execute all top-level flow steps sequentially with nil initial chain.
+	lastStep, finalChain, err := runSequential(ctx, wf, wf.Flow, state, celEnv, reg, nil)
 	if err != nil {
 		state.Execution.Status = "failed"
 		return nil, err
@@ -48,7 +48,8 @@ func Run(ctx context.Context, wf *model.Workflow, inputs map[string]any, env map
 	state.Execution.Status = "success"
 
 	// Resolve and return the workflow output expression.
-	return resolveOutput(wf.Output, state, celEnv, lastStep)
+	// If no explicit output is defined, return the final chain value.
+	return resolveOutput(wf.Output, state, celEnv, lastStep, finalChain)
 }
 
 func workflowWithInlineParticipants(wf *model.Workflow) *model.Workflow {

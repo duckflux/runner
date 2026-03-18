@@ -26,6 +26,12 @@ func BuildRegistry(wf *model.Workflow, env map[string]string, runnerFn SubWorkfl
 	return reg, nil
 }
 
+// BuildOne instantiates a single participant from its definition.
+// Exported so the engine can build anonymous inline participants on the fly.
+func BuildOne(def model.Participant, env map[string]string, runnerFn SubWorkflowRunnerFunc) (Participant, error) {
+	return buildOne("", def, env, runnerFn)
+}
+
 // buildOne instantiates a single participant from its definition.
 func buildOne(name string, def model.Participant, env map[string]string, runnerFn SubWorkflowRunnerFunc) (Participant, error) {
 	switch def.Type {

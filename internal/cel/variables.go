@@ -53,9 +53,18 @@ type LoopContext struct {
 type State struct {
 	Workflow  WorkflowMeta
 	Execution ExecutionMeta
-	Input     map[string]any
-	Env       map[string]string
-	Steps     map[string]*StepResult
+	// WorkflowInputs holds the workflow-level inputs, accessible as workflow.inputs.*
+	WorkflowInputs map[string]any
+	// WorkflowOutput holds the resolved workflow output, accessible as workflow.output
+	WorkflowOutput any
+	// CurrentInput holds the current participant's input (chain + explicit merged),
+	// accessible as the CEL variable "input".
+	CurrentInput any
+	// CurrentOutput holds the current participant's output after execution,
+	// accessible as the CEL variable "output".
+	CurrentOutput any
+	Env           map[string]string
+	Steps         map[string]*StepResult
 	// EventPayload holds data from an event when running wait/emit related steps.
 	EventPayload any
 	// Now is injected by the engine as a timestamp for expressions.

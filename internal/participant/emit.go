@@ -9,6 +9,10 @@ import (
 
 // EmitParticipant is a minimal implementation of the "emit" participant
 // type. In v1 this is a stub: it logs the event and returns success.
+//
+// TODO(v0.3.x): Implement acknowledged-timeout behavior for ack:true mode.
+// When the event hub integration is built, emit with ack:true + timeout should
+// respect onTimeout (fail/skip). Currently deferred because the event hub is stubbed.
 type EmitParticipant struct {
 	def model.Participant
 }

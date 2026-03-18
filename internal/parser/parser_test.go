@@ -53,7 +53,7 @@ participants:
   coder:
     type: exec
     run: echo coder
-    cwd: input["repoUrl"]
+    cwd: workflow.inputs["repoUrl"]
     timeout: 15m
     onError: retry
     retry:
@@ -96,7 +96,7 @@ output:
 		t.Fatalf("Participants len = %d, want 2", len(wf.Participants))
 	}
 	coder := wf.Participants["coder"]
-	if coder.CWD != `input["repoUrl"]` {
+	if coder.CWD != `workflow.inputs["repoUrl"]` {
 		t.Errorf("coder.CWD = %q, want input[\"repoUrl\"]", coder.CWD)
 	}
 	if coder.Retry == nil || coder.Retry.Max != 3 {

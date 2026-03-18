@@ -1,0 +1,14 @@
+id: chain-example
+name: Implicit Chain Example
+version: "1"
+description: Demonstrates v0.3 implicit I/O chain with anonymous inline participants.
+
+flow:
+  - type: exec
+    run: echo '{"greeting":"hello","target":"world"}'
+
+  - type: exec
+    as: shout
+    run: echo "received chain input"
+
+output: shout.output

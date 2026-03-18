@@ -13,7 +13,7 @@ import (
 )
 
 // schemaURL is the canonical URI used when loading the embedded schema.
-const schemaURL = "https://duckflux.dev/schema/v0.2/duckflux.schema.json"
+const schemaURL = "https://duckflux.dev/schema/v0.3/duckflux.schema.json"
 
 var (
 	schemaOnce sync.Once

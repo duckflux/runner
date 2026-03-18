@@ -50,11 +50,11 @@ func TestNewStateDefaultInputs(t *testing.T) {
 	}
 	state := NewState(wf, nil, nil)
 
-	if state.Input["branch"] != "main" {
-		t.Errorf("Input[branch] = %v, want main", state.Input["branch"])
+	if state.WorkflowInputs["branch"] != "main" {
+		t.Errorf("Input[branch] = %v, want main", state.WorkflowInputs["branch"])
 	}
-	if state.Input["user"] != "alice" {
-		t.Errorf("Input[user] = %v, want alice", state.Input["user"])
+	if state.WorkflowInputs["user"] != "alice" {
+		t.Errorf("Input[user] = %v, want alice", state.WorkflowInputs["user"])
 	}
 }
 
@@ -67,8 +67,8 @@ func TestNewStateCallerInputsOverrideDefaults(t *testing.T) {
 	}
 	state := NewState(wf, map[string]any{"branch": "dev"}, nil)
 
-	if state.Input["branch"] != "dev" {
-		t.Errorf("Input[branch] = %v, want dev", state.Input["branch"])
+	if state.WorkflowInputs["branch"] != "dev" {
+		t.Errorf("Input[branch] = %v, want dev", state.WorkflowInputs["branch"])
 	}
 }
 
@@ -192,9 +192,9 @@ func TestEvalInputNil(t *testing.T) {
 
 func TestEvalInputCELStringExpression(t *testing.T) {
 	celEnv := mustNewEnv(t, nil, nil)
-	state := &cel.State{Input: map[string]any{"branch": "main"}}
+	state := &cel.State{WorkflowInputs: map[string]any{"branch": "main"}}
 
-	v, err := evalInput(`input["branch"]`, state, celEnv)
+	v, err := evalInput(`workflow.inputs["branch"]`, state, celEnv)
 	if err != nil {
 		t.Fatalf("evalInput error: %v", err)
 	}
@@ -205,10 +205,10 @@ func TestEvalInputCELStringExpression(t *testing.T) {
 
 func TestEvalInputCELMapExpression(t *testing.T) {
 	celEnv := mustNewEnv(t, nil, nil)
-	state := &cel.State{Input: map[string]any{"branch": "dev"}}
+	state := &cel.State{WorkflowInputs: map[string]any{"branch": "dev"}}
 
 	raw := map[string]interface{}{
-		"ref": `input["branch"]`,
+		"ref": `workflow.inputs["branch"]`,
 	}
 	v, err := evalInput(raw, state, celEnv)
 	if err != nil {
@@ -256,7 +256,7 @@ func TestResolveOutputNilUsesLastStep(t *testing.T) {
 		},
 	}
 
-	v, err := resolveOutput(nil, state, celEnv, "step1")
+	v, err := resolveOutput(nil, state, celEnv, "step1", nil)
 	if err != nil {
 		t.Fatalf("resolveOutput error: %v", err)
 	}
@@ -274,7 +274,7 @@ func TestResolveOutputExpression(t *testing.T) {
 	}
 
 	out := &model.WorkflowOutput{Expression: `step1.output.result`}
-	v, err := resolveOutput(out, state, celEnv, "step1")
+	v, err := resolveOutput(out, state, celEnv, "step1", nil)
 	if err != nil {
 		t.Fatalf("resolveOutput error: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestResolveOutputMap(t *testing.T) {
 			"myCode": "step1.output.code",
 		},
 	}
-	v, err := resolveOutput(out, state, celEnv, "step1")
+	v, err := resolveOutput(out, state, celEnv, "step1", nil)
 	if err != nil {
 		t.Fatalf("resolveOutput error: %v", err)
 	}
@@ -362,7 +362,7 @@ func TestRunInputMapping(t *testing.T) {
 		Participants: map[string]model.Participant{
 			"step1": {
 				Type:  model.ParticipantTypeExec,
-				Input: `input["branch"]`,
+				Input: `workflow.inputs["branch"]`,
 			},
 		},
 		Flow: []model.FlowStep{{Participant: "step1"}},
@@ -885,7 +885,7 @@ func TestRunIfConditionUsesInputVariable(t *testing.T) {
 		},
 		Flow: []model.FlowStep{
 			{If: &model.IfStep{
-				Condition: `input["deploy"] == "true"`,
+				Condition: `workflow.inputs["deploy"] == "true"`,
 				Then:      []model.FlowStep{{Participant: "deploy"}},
 				Else:      []model.FlowStep{{Participant: "skipDeploy"}},
 			}},
@@ -1307,7 +1307,7 @@ func TestRunStepResultHasTimingFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEnv: %v", err)
 	}
-	_, runErr := runSequential(context.Background(), wf, wf.Flow, state, celEnv, reg)
+	_, _, runErr := runSequential(context.Background(), wf, wf.Flow, state, celEnv, reg, nil)
 	if runErr != nil {
 		t.Fatalf("runSequential: %v", runErr)
 	}
@@ -1343,7 +1343,7 @@ func TestRunStepResultHasErrorOnFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEnv: %v", err)
 	}
-	_, runErr := runSequential(context.Background(), wf, wf.Flow, state, celEnv, reg)
+	_, _, runErr := runSequential(context.Background(), wf, wf.Flow, state, celEnv, reg, nil)
 	if runErr != nil {
 		t.Fatalf("runSequential: %v", runErr)
 	}

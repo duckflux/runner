@@ -22,7 +22,11 @@ func NewEnv(wf *model.Workflow) (*Environment, error) {
 	opts := []gcel.EnvOption{
 		gcel.Variable("workflow", gcel.MapType(gcel.StringType, gcel.DynType)),
 		gcel.Variable("execution", gcel.MapType(gcel.StringType, gcel.DynType)),
-		gcel.Variable("input", gcel.MapType(gcel.StringType, gcel.DynType)),
+		// input is the current participant's input (chain + explicit merged).
+		// Declared as dyn because it may be a map, string, or any other type.
+		gcel.Variable("input", gcel.DynType),
+		// output is the current participant's output after execution.
+		gcel.Variable("output", gcel.DynType),
 		gcel.Variable("env", gcel.MapType(gcel.StringType, gcel.StringType)),
 		// Event payload variable available for wait/emit related expressions.
 		gcel.Variable("event", gcel.MapType(gcel.StringType, gcel.DynType)),
@@ -56,13 +60,27 @@ func NewEnv(wf *model.Workflow) (*Environment, error) {
 // Participants that have not yet produced a result are included with an empty map so
 // that declared variables are always present in the activation.
 func (e *Environment) Bindings(s *State) map[string]any {
-	input := s.Input
-	if input == nil {
-		input = map[string]any{}
-	}
 	env := s.Env
 	if env == nil {
 		env = map[string]string{}
+	}
+
+	// workflow.inputs for workflow-level inputs
+	wfInputs := s.WorkflowInputs
+	if wfInputs == nil {
+		wfInputs = map[string]any{}
+	}
+
+	// Participant-scoped input: may be any type (map, string, nil, etc.)
+	var input any = s.CurrentInput
+	if input == nil {
+		input = map[string]any{}
+	}
+
+	// Participant-scoped output
+	var output any = s.CurrentOutput
+	if output == nil {
+		output = map[string]any{}
 	}
 
 	vars := map[string]any{
@@ -70,6 +88,8 @@ func (e *Environment) Bindings(s *State) map[string]any {
 			"id":      s.Workflow.ID,
 			"name":    s.Workflow.Name,
 			"version": s.Workflow.Version,
+			"inputs":  wfInputs,
+			"output":  s.WorkflowOutput,
 		},
 		"execution": map[string]any{
 			"id":        s.Execution.ID,
@@ -79,10 +99,11 @@ func (e *Environment) Bindings(s *State) map[string]any {
 			"cwd":       s.Execution.CWD,
 			"context":   s.Execution.Context,
 		},
-		"input": input,
-		"env":   env,
-		"event": map[string]any{},
-		"now":   s.Now,
+		"input":  input,
+		"output": output,
+		"env":    env,
+		"event":  map[string]any{},
+		"now":    s.Now,
 		// "_loop" is used because "loop" is a reserved identifier in CEL.
 		"_loop": map[string]any{},
 	}

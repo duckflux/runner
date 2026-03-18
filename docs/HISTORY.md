@@ -2,6 +2,25 @@
 
 ## Past Decisions
 
+### Spec v0.3 upgrade
+**Date:** March 2026 · **By:** @ggondim, @copilot
+
+Upgraded the runner to match `duckflux` spec v0.3. Notable changes:
+
+- **Variable namespace redesign**: Workflow inputs moved from `input.*` to `workflow.inputs.*`. `input` and `output` are now participant-scoped (bound to the current step's I/O during execution). `workflow.output` is available for reading the final resolved output.
+- **Implicit I/O chain**: Output of step N automatically becomes input of step N+1. Chain propagates through all control constructs (`if`, `loop`, `parallel`). When no explicit `output:` block is defined, the workflow returns the final chain value.
+- **Chain merge rules**: When a step has both chain input and explicit `input:` mapping: map+map merges keys (explicit wins on conflict); for all other type combinations, explicit wins.
+- **Anonymous inline participants**: Flow steps with `type` but no `as` field are now valid. They execute normally and contribute to the chain without creating a named binding.
+- **Named inline uniqueness**: `as` values on inline participants must be globally unique across all top-level participant names and other inline `as` values. Duplicates are rejected at parse time.
+- **Parallel chain output**: After a `parallel` block, the chain value is an ordered array of each branch's final output (declaration order).
+- **Schema sync**: Embedded JSON Schema updated to v0.3; `method` field now uses enum constraint; `inlineParticipant` no longer requires `as`.
+- **`flow` non-empty contract**: `flow: []` is rejected at both schema and semantic validation levels.
+- **`emit` acknowledged-timeout**: Deferred — the event hub is currently stubbed (v1), so `emit.onTimeout` for `ack: true` mode is not yet implemented. Will be addressed when the event hub integration is built out (tracked as a v0.3.x follow-up).
+
+Implementation preserves backward compatibility for workflows that don't use the new chain features. CEL type for `input` changed from `map[string]dyn` to `dyn` to support both map and scalar chain values.
+
+---
+
 ### Spec v0.2 upgrade
 **Date:** March 2026 · **By:** @ggondim, @copilot
 

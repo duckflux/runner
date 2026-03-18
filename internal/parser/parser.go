@@ -44,7 +44,10 @@ func Parse(r io.Reader) (*model.Workflow, error) {
 		}
 	}
 	// Walk the flow to collect inline participants that provide an `as` name.
-	collectInlineParticipants(wf.Flow, synthetic)
+	// Detect uniqueness conflicts with top-level participants and other inline names.
+	if dupErrs := collectInlineParticipants(wf.Flow, synthetic); len(dupErrs) > 0 {
+		return nil, dupErrs
+	}
 
 	// Build a copy of the workflow for validation with the synthetic map.
 	wfForValidation := wf
@@ -67,29 +70,48 @@ func Parse(r io.Reader) (*model.Workflow, error) {
 
 // collectInlineParticipants adds any inline participants with an `as` name to
 // the provided map. It recurses into nested flow constructs.
-func collectInlineParticipants(steps []model.FlowStep, out map[string]model.Participant) {
-	for _, s := range steps {
+// It returns validation errors if any inline `as` name conflicts with an
+// existing participant name or with another inline `as` name.
+func collectInlineParticipants(steps []model.FlowStep, out map[string]model.Participant) ValidationErrors {
+	var errs ValidationErrors
+	collectInlineParticipantsWalk(steps, out, "flow", &errs)
+	if len(errs) == 0 {
+		return nil
+	}
+	return errs
+}
+
+func collectInlineParticipantsWalk(steps []model.FlowStep, out map[string]model.Participant, path string, errs *ValidationErrors) {
+	for i, s := range steps {
+		stepPath := fmt.Sprintf("%s[%d]", path, i)
 		if s.InlineParticipant != nil {
 			if s.InlineParticipant.As != "" {
-				out[s.InlineParticipant.As] = *s.InlineParticipant
+				name := s.InlineParticipant.As
+				if _, exists := out[name]; exists {
+					*errs = append(*errs, &ValidationError{
+						Field:   stepPath + ".as",
+						Message: fmt.Sprintf("inline participant name %q conflicts with an existing participant or inline name", name),
+					})
+				} else {
+					out[name] = *s.InlineParticipant
+				}
 			}
 			continue
 		}
 		if s.Override != nil {
-			// overrides do not declare participants
 			continue
 		}
 		if s.Loop != nil {
-			collectInlineParticipants(s.Loop.Steps, out)
+			collectInlineParticipantsWalk(s.Loop.Steps, out, stepPath+".loop.steps", errs)
 			continue
 		}
 		if s.Parallel != nil {
-			collectInlineParticipants(s.Parallel.Steps, out)
+			collectInlineParticipantsWalk(s.Parallel.Steps, out, stepPath+".parallel", errs)
 			continue
 		}
 		if s.If != nil {
-			collectInlineParticipants(s.If.Then, out)
-			collectInlineParticipants(s.If.Else, out)
+			collectInlineParticipantsWalk(s.If.Then, out, stepPath+".then", errs)
+			collectInlineParticipantsWalk(s.If.Else, out, stepPath+".else", errs)
 			continue
 		}
 	}

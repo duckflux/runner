@@ -105,9 +105,30 @@ func TestCompileInputVar(t *testing.T) {
 	wf := newTestWorkflow(nil, nil)
 	env, _ := NewEnv(wf)
 
-	_, err := env.Compile(`input.repoUrl == "https://github.com/example/repo"`)
+	// In v0.3, input is participant-scoped (dyn type) — can be map, string, etc.
+	_, err := env.Compile(`input == "hello"`)
 	if err != nil {
-		t.Fatalf("Compile(input.repoUrl) error: %v", err)
+		t.Fatalf("Compile(input == 'hello') error: %v", err)
+	}
+}
+
+func TestCompileWorkflowInputsVar(t *testing.T) {
+	wf := newTestWorkflow(nil, nil)
+	env, _ := NewEnv(wf)
+
+	_, err := env.Compile(`workflow.inputs.repoUrl == "https://github.com/example/repo"`)
+	if err != nil {
+		t.Fatalf("Compile(workflow.inputs.repoUrl) error: %v", err)
+	}
+}
+
+func TestCompileOutputVar(t *testing.T) {
+	wf := newTestWorkflow(nil, nil)
+	env, _ := NewEnv(wf)
+
+	_, err := env.Compile(`output == "result"`)
+	if err != nil {
+		t.Fatalf("Compile(output) error: %v", err)
 	}
 }
 
@@ -210,17 +231,51 @@ func TestEvalWorkflowID(t *testing.T) {
 func TestEvalInputField(t *testing.T) {
 	wf := newTestWorkflow(nil, nil)
 	env, _ := NewEnv(wf)
-	prog, _ := env.Compile(`input.branch == "main"`)
+	prog, _ := env.Compile(`input == "main"`)
 
 	state := &State{
-		Input: map[string]any{"branch": "main"},
+		CurrentInput: "main",
 	}
 	result, err := env.Eval(prog, state)
 	if err != nil {
 		t.Fatalf("Eval() error: %v", err)
 	}
 	if result != true {
-		t.Errorf("Eval(input.branch == 'main') = %v, want true", result)
+		t.Errorf("Eval(input == 'main') = %v, want true", result)
+	}
+}
+
+func TestEvalWorkflowInputs(t *testing.T) {
+	wf := newTestWorkflow(nil, nil)
+	env, _ := NewEnv(wf)
+	prog, _ := env.Compile(`workflow.inputs.branch == "main"`)
+
+	state := &State{
+		WorkflowInputs: map[string]any{"branch": "main"},
+	}
+	result, err := env.Eval(prog, state)
+	if err != nil {
+		t.Fatalf("Eval() error: %v", err)
+	}
+	if result != true {
+		t.Errorf("Eval(workflow.inputs.branch == 'main') = %v, want true", result)
+	}
+}
+
+func TestEvalOutputVar(t *testing.T) {
+	wf := newTestWorkflow(nil, nil)
+	env, _ := NewEnv(wf)
+	prog, _ := env.Compile(`output == "result"`)
+
+	state := &State{
+		CurrentOutput: "result",
+	}
+	result, err := env.Eval(prog, state)
+	if err != nil {
+		t.Fatalf("Eval() error: %v", err)
+	}
+	if result != true {
+		t.Errorf("Eval(output == 'result') = %v, want true", result)
 	}
 }
 
@@ -463,9 +518,4 @@ func TestBindingsParticipantDefault(t *testing.T) {
 	if len(m) != 0 {
 		t.Errorf("unrun participant should have empty map, got %v", m)
 	}
-}
-
-// Placeholder for v0.3 CEL namespace and chain binding tests.
-func TestV03CELBindings_Placeholder(t *testing.T) {
-	t.Skip("v0.3 CEL bindings tests are placeholders; implement during v0.3 work")
 }

@@ -261,12 +261,7 @@ func validateFlowSteps(steps []model.FlowStep, participants map[string]model.Par
 
 		case step.InlineParticipant != nil:
 			p := step.InlineParticipant
-			if p.As == "" {
-				*errs = append(*errs, &ValidationError{
-					Field:   stepPath + ".as",
-					Message: "inline participant must define 'as'",
-				})
-			} else if model.IsReservedName(p.As) {
+			if p.As != "" && model.IsReservedName(p.As) {
 				*errs = append(*errs, &ValidationError{
 					Field:   stepPath + ".as",
 					Message: fmt.Sprintf("inline participant name %q is reserved", p.As),

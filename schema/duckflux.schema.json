@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://duckflux.dev/schema/v0.2/duckflux.schema.json",
+  "$id": "https://duckflux.dev/schema/v0.3/duckflux.schema.json",
   "title": "duckflux Workflow",
   "description": "Schema for duckflux — a minimal, deterministic, runtime-agnostic workflow DSL.",
   "type": "object",
@@ -13,7 +13,7 @@
     },
     "name": {
       "type": "string",
-      "description": "Display workflow name."
+      "description": "Human-readable workflow name."
     },
     "version": {
       "description": "Version identifier for the workflow definition.",
@@ -84,7 +84,7 @@
 
     "inputs": {
       "type": "object",
-      "description": "Workflow input parameters. Each key is a parameter name. Value can be null (string, no schema), or a JSON Schema object for validation.",
+      "description": "Workflow input parameters. Accessed in CEL as workflow.inputs.<field>. Each key is a parameter name. Value can be null (string, no schema), or a JSON Schema object for validation.",
       "additionalProperties": {
         "oneOf": [
           { "type": "null" },
@@ -154,7 +154,7 @@
     },
 
     "participantInput": {
-      "description": "Input mapping. String for direct passthrough, object for structured mapping. Values are CEL expressions.",
+      "description": "Explicit input mapping. String for direct passthrough, object for structured mapping. Values are CEL expressions. Merged with implicit I/O chain input at runtime.",
       "oneOf": [
         { "type": "string" },
         {
@@ -197,7 +197,7 @@
         },
         "as": {
           "type": "string",
-          "description": "Display name."
+          "description": "Human-readable display name."
         },
         "timeout": {
           "$ref": "#/$defs/duration"
@@ -230,6 +230,7 @@
         },
         "method": {
           "type": "string",
+          "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"],
           "description": "[http] HTTP method."
         },
         "headers": {
@@ -278,12 +279,12 @@
 
     "inlineParticipant": {
       "type": "object",
-      "required": ["as", "type"],
-      "description": "An inline participant definition in the flow. Must have 'as' for naming.",
+      "required": ["type"],
+      "description": "An inline participant definition in the flow. 'as' is optional — if omitted, the participant is anonymous and its output is only accessible via the implicit I/O chain.",
       "properties": {
         "as": {
           "type": "string",
-          "description": "Required name for inline participants. Used to reference outputs."
+          "description": "Optional name for inline participants. If provided, must be unique across all participant names. Enables output reference by name."
         },
         "type": {
           "type": "string",
@@ -314,7 +315,7 @@
         "cwd": { "type": "string" },
 
         "url": { "type": "string" },
-        "method": { "type": "string" },
+        "method": { "type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
         "headers": { "type": "object", "additionalProperties": { "type": "string" } },
         "body": { "oneOf": [{ "type": "string" }, { "type": "object" }] },
 
@@ -332,7 +333,7 @@
 
     "flowSequence": {
       "type": "array",
-      "description": "Ordered list of flow steps.",
+      "description": "Ordered list of flow steps. Each step's output is implicitly chained as input to the next step.",
       "minItems": 1,
       "items": {
         "$ref": "#/$defs/flowStep"
@@ -340,7 +341,7 @@
     },
 
     "flowStep": {
-      "description": "A single step in the flow: participant reference (string), control construct, inline participant, or participant override.",
+      "description": "A single step in the flow: participant reference (string), control construct, inline participant (named or anonymous), or participant override.",
       "oneOf": [
         {
           "type": "string",
@@ -399,7 +400,7 @@
       "properties": {
         "parallel": {
           "$ref": "#/$defs/flowSequence",
-          "description": "Steps to run concurrently."
+          "description": "Steps to run concurrently. The chained output after a parallel block is an array of all branch outputs in declaration order."
         }
       }
     },
@@ -478,7 +479,7 @@
           { "required": ["parallel"] },
           { "required": ["if"] },
           { "required": ["wait"] },
-          { "required": ["as", "type"] }
+          { "required": ["type"] }
         ]
       },
       "additionalProperties": {
@@ -510,7 +511,7 @@
     },
 
     "workflowOutput": {
-      "description": "Workflow output. String (single CEL expression), object (structured mapping), or object with schema+map.",
+      "description": "Workflow output. Accessed in CEL as workflow.output. String (single CEL expression), object (structured mapping), or object with schema+map.",
       "oneOf": [
         {
           "type": "string",

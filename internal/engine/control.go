@@ -21,7 +21,7 @@ import (
 // The loop context (loop.index, loop.iteration, loop.first, loop.last) is set
 // on state before each iteration and restored to its previous value when the
 // loop exits, enabling correct semantics for nested loops.
-func runLoop(ctx context.Context, wf *model.Workflow, step *model.LoopStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry) error {
+func runLoop(ctx context.Context, wf *model.Workflow, step *model.LoopStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry, chain any) (any, error) {
 	// Pre-compile the until expression once if provided.
 	var hasUntil bool
 	untilExpr := step.Until
@@ -35,13 +35,12 @@ func runLoop(ctx context.Context, wf *model.Workflow, step *model.LoopStep, stat
 	}
 	maxIterations, hasMax, err := resolveLoopMax(step.Max, state, celEnv, step.As)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Safety guard: without either until or max the loop would be infinite.
-	// The semantic validator catches this at parse time; guard here as a safety net.
 	if !hasUntil && !hasMax {
-		return fmt.Errorf("loop: neither until nor max specified; aborting to prevent infinite loop")
+		return nil, fmt.Errorf("loop: neither until nor max specified; aborting to prevent infinite loop")
 	}
 
 	// Save and restore the outer loop context to support nested loops.
@@ -53,8 +52,6 @@ func runLoop(ctx context.Context, wf *model.Workflow, step *model.LoopStep, stat
 		iteration++
 		index := iteration - 1
 
-		// Determine in advance whether this is the last iteration — only possible
-		// when max is set. For until-only loops, last is resolved after the body runs.
 		isLast := hasMax && int(iteration) == maxIterations
 
 		state.Loop = &cel.LoopContext{
@@ -64,44 +61,43 @@ func runLoop(ctx context.Context, wf *model.Workflow, step *model.LoopStep, stat
 			Last:      isLast,
 		}
 
-		// Execute the loop body steps. If the loop defines an `as` name, rewrite
-		// occurrences of that name in all CEL expressions inside the body to the
-		// canonical "loop." form so the CEL compiler (which recognizes "loop." ->
-		// "_loop.") can type-check and evaluate them.
 		body := step.Steps
 		if step.As != "" {
 			body = rewriteFlowStepsForLoopAs(step.Steps, step.As)
 		}
-		if _, err := runSequential(ctx, wf, body, state, celEnv, reg); err != nil {
-			return err
+		// Chain entering iteration N is the result of iteration N-1.
+		_, newChain, err := runSequential(ctx, wf, body, state, celEnv, reg, chain)
+		if err != nil {
+			return nil, err
 		}
+		chain = newChain
 
 		// Evaluate the until condition after the body has run.
 		if hasUntil {
 			prog, err := celEnv.Compile(untilExpr)
 			if err != nil {
-				return fmt.Errorf("loop: compiling until expression: %w", err)
+				return nil, fmt.Errorf("loop: compiling until expression: %w", err)
 			}
 			state.Now = time.Now().UTC()
 			result, err := celEnv.Eval(prog, state)
 			if err != nil {
-				return fmt.Errorf("loop: evaluating until expression: %w", err)
+				return nil, fmt.Errorf("loop: evaluating until expression: %w", err)
 			}
 			done, ok := result.(bool)
 			if !ok {
-				return fmt.Errorf("loop: until expression must evaluate to bool, got %T", result)
+				return nil, fmt.Errorf("loop: until expression must evaluate to bool, got %T", result)
 			}
 			if done {
 				break
 			}
 		}
 
-		// Stop if the max iteration count has been reached.
 		if hasMax && int(iteration) >= maxIterations {
 			break
 		}
 	}
-	return nil
+	// Chain after loop is result of last step in last iteration.
+	return chain, nil
 }
 
 func resolveLoopMax(raw interface{}, state *cel.State, celEnv *cel.Environment, loopAlias string) (int, bool, error) {
@@ -166,59 +162,66 @@ func resolveLoopMax(raw interface{}, state *cel.State, celEnv *cel.Environment, 
 // goroutines: if any branch fails, cancel is called so that still-running
 // branches are signalled to stop. The first error encountered is returned.
 // Writes to state.Steps are made thread-safely via state.SetStep.
-func runParallel(ctx context.Context, wf *model.Workflow, step *model.ParallelStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry) error {
+func runParallel(ctx context.Context, wf *model.Workflow, step *model.ParallelStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry, chain any) (any, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	errs := make([]error, len(step.Steps))
+	outputs := make([]any, len(step.Steps))
 	var wg sync.WaitGroup
 
 	for i, branch := range step.Steps {
 		wg.Add(1)
 		go func(idx int, b model.FlowStep) {
 			defer wg.Done()
-			_, err := runSequential(ctx, wf, []model.FlowStep{b}, state, celEnv, reg)
+			// Each branch starts with the same incoming chain.
+			_, branchChain, err := runSequential(ctx, wf, []model.FlowStep{b}, state, celEnv, reg, chain)
 			if err != nil {
 				errs[idx] = err
 				cancel()
+			} else {
+				outputs[idx] = branchChain
 			}
 		}(i, branch)
 	}
 
 	wg.Wait()
 
-	// Return the first non-nil error.
 	for _, err := range errs {
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	// Chain after parallel is an ordered array of branch outputs.
+	return outputs, nil
 }
 
 // runIf evaluates the CEL condition and executes either the then or the else
 // branch. It returns the name of the last participant executed (if any), which
 // may propagate up as the implicit workflow output.
-func runIf(ctx context.Context, wf *model.Workflow, step *model.IfStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry) (string, error) {
+func runIf(ctx context.Context, wf *model.Workflow, step *model.IfStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry, chain any) (string, any, error) {
 	prog, err := celEnv.Compile(step.Condition)
 	if err != nil {
-		return "", fmt.Errorf("if: compiling condition: %w", err)
+		return "", nil, fmt.Errorf("if: compiling condition: %w", err)
 	}
 	state.Now = time.Now().UTC()
 	result, err := celEnv.Eval(prog, state)
 	if err != nil {
-		return "", fmt.Errorf("if: evaluating condition: %w", err)
+		return "", nil, fmt.Errorf("if: evaluating condition: %w", err)
 	}
 
 	if cond, ok := result.(bool); ok && cond {
-		return runSequential(ctx, wf, step.Then, state, celEnv, reg)
+		name, branchChain, err := runSequential(ctx, wf, step.Then, state, celEnv, reg, chain)
+		return name, branchChain, err
 	} else if !ok {
-		return "", fmt.Errorf("if: condition must evaluate to bool, got %T", result)
+		return "", nil, fmt.Errorf("if: condition must evaluate to bool, got %T", result)
 	}
 	if len(step.Else) > 0 {
-		return runSequential(ctx, wf, step.Else, state, celEnv, reg)
+		name, branchChain, err := runSequential(ctx, wf, step.Else, state, celEnv, reg, chain)
+		return name, branchChain, err
 	}
-	return "", nil
+	// False branch without else: chain unchanged.
+	return "", chain, nil
 }
 
 // rewriteFlowStepsForLoopAs returns a new slice of FlowStep where occurrences

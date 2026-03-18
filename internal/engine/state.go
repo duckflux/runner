@@ -44,9 +44,9 @@ func NewState(wf *model.Workflow, inputs map[string]any, env map[string]string) 
 			Status:    "running",
 			Context:   map[string]any{},
 		},
-		Input: inputs,
-		Env:   env,
-		Steps: make(map[string]*cel.StepResult),
+		WorkflowInputs: inputs,
+		Env:            env,
+		Steps:          make(map[string]*cel.StepResult),
 	}
 	if cwd, err := os.Getwd(); err == nil {
 		s.Execution.CWD = cwd

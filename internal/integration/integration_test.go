@@ -128,7 +128,7 @@ participants:
   echo:
     type: exec
     run: cat
-    input: input["message"]
+    input: workflow.inputs["message"]
 flow:
   - echo
 `
@@ -335,7 +335,7 @@ participants:
   where:
     type: exec
     run: pwd
-    cwd: input["dir"]
+    cwd: workflow.inputs["dir"]
 flow:
   - where
 `
@@ -686,7 +686,8 @@ participants:
   process:
     type: exec
     run: cat
-    input: fetch.output.greeting
+    input:
+      msg: fetch.output.greeting
 flow:
   - fetch
   - process
@@ -696,10 +697,7 @@ flow:
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
-	s, ok := out.(string)
-	if !ok {
-		t.Fatalf("output type = %T, want string", out)
-	}
+	s := fmt.Sprintf("%v", out)
 	if !strings.Contains(s, "hello-from-server") {
 		t.Errorf("output = %q, want string containing 'hello-from-server'", s)
 	}
@@ -756,8 +754,6 @@ id: http-dynamic
 inputs:
   endpoint:
     type: string
-  verb:
-    type: string
   token:
     type: string
   msg:
@@ -765,12 +761,12 @@ inputs:
 participants:
   call:
     type: http
-    url: input["endpoint"]
-    method: input["verb"]
+    url: workflow.inputs["endpoint"]
+    method: POST
     headers:
-      X-Token: input["token"]
+      X-Token: workflow.inputs["token"]
     body:
-      msg: input["msg"]
+      msg: workflow.inputs["msg"]
       literal: static-value
 flow:
   - call
@@ -778,7 +774,6 @@ flow:
 
 	out, err := runWorkflow(t, yaml, map[string]any{
 		"endpoint": ts.URL,
-		"verb":     "post",
 		"token":    "abc123",
 		"msg":      "hello-dynamic",
 	})
@@ -803,9 +798,279 @@ flow:
 	}
 }
 
-// Placeholder for v0.3 integration tests focused on chain semantics and anonymous inline participants.
-func TestV03Integration_Placeholder(t *testing.T) {
-	t.Skip("v0.3 integration placeholders; add explicit scenarios for chain semantics and anonymous inline participants")
+// ── v0.3 chain semantics ──────────────────────────────────────────────────────
+
+func TestV03_AnonymousInlineMinimalWorkflow(t *testing.T) {
+	yaml := `
+flow:
+  - type: exec
+    run: echo "anonymous-ok"
+`
+	out, err := runWorkflow(t, yaml, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	s, ok := out.(string)
+	if !ok {
+		t.Fatalf("output type = %T, want string", out)
+	}
+	if !strings.Contains(s, "anonymous-ok") {
+		t.Errorf("output = %q, want string containing 'anonymous-ok'", s)
+	}
+}
+
+func TestV03_ImplicitChainSequential(t *testing.T) {
+	// Step 1 outputs JSON, step 2 receives it via chain (cat reads from stdin).
+	yaml := `
+participants:
+  produce:
+    type: exec
+    run: echo "chained-value"
+  consume:
+    type: exec
+    run: cat
+flow:
+  - produce
+  - consume
+`
+	out, err := runWorkflow(t, yaml, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	s, ok := out.(string)
+	if !ok {
+		t.Fatalf("output type = %T, want string", out)
+	}
+	if !strings.Contains(s, "chained-value") {
+		t.Errorf("output = %q, want string containing 'chained-value'", s)
+	}
+}
+
+func TestV03_ChainMapMergePrecedence(t *testing.T) {
+	// Chain provides a map; explicit input provides overlapping keys; explicit wins.
+	yaml := `
+participants:
+  produce:
+    type: exec
+    run: printf '{"a":"from-chain","b":"from-chain"}'
+  consume:
+    type: exec
+    run: cat
+    input:
+      a: '"from-explicit"'
+flow:
+  - produce
+  - consume
+`
+	out, err := runWorkflow(t, yaml, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	m, ok := out.(map[string]any)
+	if !ok {
+		t.Fatalf("output type = %T, want map[string]any", out)
+	}
+	if m["a"] != "from-explicit" {
+		t.Errorf("a = %v, want from-explicit", m["a"])
+	}
+	if m["b"] != "from-chain" {
+		t.Errorf("b = %v, want from-chain", m["b"])
+	}
+}
+
+func TestV03_ChainIncompatibleTypesError(t *testing.T) {
+	// Chain is a map, explicit input is a string → incompatible types error per spec §5.7.
+	yaml := `
+participants:
+  produce:
+    type: exec
+    run: printf '{"key":"value"}'
+  consume:
+    type: exec
+    run: cat
+    input: '"override-string"'
+flow:
+  - produce
+  - consume
+`
+	_, err := runWorkflow(t, yaml, nil)
+	if err == nil {
+		t.Fatal("expected incompatible chain merge error, got nil")
+	}
+	if !strings.Contains(err.Error(), "incompatible types") {
+		t.Errorf("error = %q, want string containing 'incompatible types'", err.Error())
+	}
+}
+
+func TestV03_IfPassThroughWhenFalseNoElse(t *testing.T) {
+	// If condition is false, no else branch → chain unchanged.
+	yaml := `
+participants:
+  produce:
+    type: exec
+    run: echo "original-chain"
+  unreachable:
+    type: exec
+    run: echo "should-not-appear"
+flow:
+  - produce
+  - if:
+      condition: "false"
+      then:
+        - unreachable
+`
+	out, err := runWorkflow(t, yaml, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	s, ok := out.(string)
+	if !ok {
+		t.Fatalf("output type = %T, want string", out)
+	}
+	if !strings.Contains(s, "original-chain") {
+		t.Errorf("output = %q, want string containing 'original-chain'", s)
+	}
+}
+
+func TestV03_ParallelReturnsOrderedArray(t *testing.T) {
+	yaml := `
+participants:
+  stepA:
+    type: exec
+    run: echo "A"
+  stepB:
+    type: exec
+    run: echo "B"
+flow:
+  - parallel:
+      - stepA
+      - stepB
+`
+	out, err := runWorkflow(t, yaml, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	arr, ok := out.([]any)
+	if !ok {
+		t.Fatalf("output type = %T, want []any (parallel outputs ordered array)", out)
+	}
+	if len(arr) != 2 {
+		t.Fatalf("output len = %d, want 2", len(arr))
+	}
+	// Check that A and B are in declaration order.
+	sA, _ := arr[0].(string)
+	sB, _ := arr[1].(string)
+	if !strings.Contains(sA, "A") {
+		t.Errorf("arr[0] = %q, want 'A'", sA)
+	}
+	if !strings.Contains(sB, "B") {
+		t.Errorf("arr[1] = %q, want 'B'", sB)
+	}
+}
+
+func TestV03_WorkflowInputsViaWorkflowNamespace(t *testing.T) {
+	yaml := `
+inputs:
+  name:
+    type: string
+participants:
+  greet:
+    type: exec
+    run: cat
+    input: workflow.inputs["name"]
+flow:
+  - greet
+`
+	out, err := runWorkflow(t, yaml, map[string]any{"name": "world"})
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	s, ok := out.(string)
+	if !ok {
+		t.Fatalf("output type = %T, want string", out)
+	}
+	if !strings.Contains(s, "world") {
+		t.Errorf("output = %q, want string containing 'world'", s)
+	}
+}
+
+func TestV03_NamedInlineUniquenessConflict(t *testing.T) {
+	yaml := `
+participants:
+  myStep:
+    type: exec
+    run: echo "named"
+flow:
+  - type: exec
+    as: myStep
+    run: echo "inline"
+`
+	_, err := runWorkflow(t, yaml, nil)
+	if err == nil {
+		t.Fatal("expected validation error for duplicate inline name, got nil")
+	}
+	if !strings.Contains(err.Error(), "conflicts") {
+		t.Errorf("error = %q, want string containing 'conflicts'", err.Error())
+	}
+}
+
+func TestV03_EmptyFlowRejected(t *testing.T) {
+	yaml := `
+flow: []
+`
+	_, err := runWorkflow(t, yaml, nil)
+	if err == nil {
+		t.Fatal("expected validation error for empty flow, got nil")
+	}
+}
+
+func TestV03_AnonymousInlineInControlFlow(t *testing.T) {
+	yaml := `
+flow:
+  - if:
+      condition: "true"
+      then:
+        - type: exec
+          run: echo "anon-in-if"
+`
+	out, err := runWorkflow(t, yaml, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	s, ok := out.(string)
+	if !ok {
+		t.Fatalf("output type = %T, want string", out)
+	}
+	if !strings.Contains(s, "anon-in-if") {
+		t.Errorf("output = %q, want string containing 'anon-in-if'", s)
+	}
+}
+
+func TestV03_DefaultOutputIsFinalChain(t *testing.T) {
+	// Without explicit output, the final chain value is returned.
+	yaml := `
+participants:
+  step1:
+    type: exec
+    run: echo "step1-out"
+  step2:
+    type: exec
+    run: echo "final-chain"
+flow:
+  - step1
+  - step2
+`
+	out, err := runWorkflow(t, yaml, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	s, ok := out.(string)
+	if !ok {
+		t.Fatalf("output type = %T, want string", out)
+	}
+	if !strings.Contains(s, "final-chain") {
+		t.Errorf("output = %q, want string containing 'final-chain'", s)
+	}
 }
 
 // ── output mapping ────────────────────────────────────────────────────────────
@@ -904,7 +1169,8 @@ participants:
   printVersion:
     type: exec
     run: cat
-    input: getVersion.output.version
+    input:
+      ver: getVersion.output.version
 flow:
   - getVersion
   - printVersion
@@ -914,10 +1180,7 @@ flow:
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
-	s, ok := out.(string)
-	if !ok {
-		t.Fatalf("output type = %T, want string", out)
-	}
+	s := fmt.Sprintf("%v", out)
 	if !strings.Contains(s, "1.2.3") {
 		t.Errorf("output = %q, want string containing '1.2.3'", s)
 	}

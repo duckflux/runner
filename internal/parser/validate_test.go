@@ -527,7 +527,7 @@ func TestValidateSemanticValidCELParticipantInput(t *testing.T) {
 		Participants: map[string]model.Participant{
 			"stepA": {
 				Type:  model.ParticipantTypeExec,
-				Input: `input["branch"]`,
+				Input: `workflow.inputs["branch"]`,
 			},
 		},
 		Flow: []model.FlowStep{{Participant: "stepA"}},
