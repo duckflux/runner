@@ -96,6 +96,11 @@ duckflux run <file.flow.yaml> [flags]
 | `--input key=value` | Pass an input value (repeatable) |
 | `--input-file path.json` | Load inputs from a JSON file |
 | `--cwd path` | Base working directory for `exec` participants |
+| `--event-backend` | Event hub backend: `memory` (default), `nats`, or `redis` |
+| `--nats-url` | NATS server URL (required when `--event-backend=nats`) |
+| `--nats-stream` | JetStream stream name (default: `duckflux-events`) |
+| `--redis-addr` | Redis server address (default: `localhost:6379`) |
+| `--redis-db` | Redis database number (default: `0`) |
 | `--verbose` | Enable debug logging |
 | `--quiet` | Suppress all output except errors |
 
@@ -160,8 +165,8 @@ Participants are named steps that can be referenced in the flow. Each has a `typ
 | `exec` | Shell command execution | ✅ Implemented |
 | `http` | HTTP request | ✅ Implemented |
 | `workflow` | Sub-workflow composition | ✅ Implemented |
+| `emit` | Publish an event to the event hub | ✅ Implemented |
 | `mcp` | MCP server delegation (`tool` field replaces `operation`) | 🔜 Stub (v2) |
-| `emit` | Publish an event to the event hub (v1: logged/stubbed) | 🔜 Stub (v1) |
 
 ### Flow Control
 
@@ -329,16 +334,18 @@ flow:
 
 ### Wait example
 
-The `wait` step supports simple timeouts, event matching (stubbed in v1), and polling. Examples:
+The `wait` step supports simple timeouts, event matching, and polling:
 
 ```yaml
 - wait:
-  timeout: 30s
+    timeout: 30s
 
-# event-based (stubbed in v1):
+# event-based:
 - wait:
-  event: my-event
-  match: "payload.type == 'ready'"
+    event: order.created
+    match: "event.orderId == 'ORD-001'"
+    timeout: 10s
+    onTimeout: fail
 ```
 
 ### Code Review Pipeline
@@ -437,6 +444,208 @@ output:
 ```bash
 duckflux run examples/code-review.flow.yaml --input branch=develop
 ```
+
+## Event Hub
+
+The event hub connects `emit` participants to `wait.event` steps — including across parent and sub-workflows. Three backends are supported.
+
+### Backends
+
+| Backend | Description | Replay (subscribe-after-publish) | Fan-out |
+|---------|-------------|----------------------------------|---------|
+| `memory` | In-process Go channel (default) | ✅ Yes | ✅ Yes |
+| `nats` | NATS JetStream | ❌ Ephemeral consumers start at latest offset | ✅ Yes (independent consumers) |
+| `redis` | Redis Streams | ✅ Yes (consumer group reads from stream start) | ✅ Yes (separate consumer groups) |
+
+### CLI Flags
+
+```
+--event-backend string   Event hub backend: memory, nats, or redis (default "memory")
+--nats-url      string   NATS server URL, e.g. nats://localhost:4222 (required for --event-backend=nats)
+--nats-stream   string   JetStream stream name (default "duckflux-events")
+--redis-addr    string   Redis server address (default "localhost:6379")
+--redis-db      int      Redis database number (default 0)
+```
+
+```bash
+# Default: in-memory hub (no extra infrastructure needed)
+duckflux run workflow.flow.yaml
+
+# NATS JetStream
+duckflux run workflow.flow.yaml --event-backend=nats --nats-url=nats://localhost:4222
+
+# Redis Streams
+duckflux run workflow.flow.yaml --event-backend=redis --redis-addr=localhost:6379
+```
+
+### `emit` Participant
+
+Publishes an event to the hub. Other steps in the same workflow (or any sub-workflow) that have a matching `wait.event` will receive it.
+
+```yaml
+participants:
+  notify:
+    type: emit
+    event: order.created
+    payload:
+      orderId: "ORD-001"
+      total: 99.95
+
+  notify_ack:
+    type: emit
+    event: payment.processed
+    ack: true          # block until the broker confirms delivery
+    timeout: 5s
+    onTimeout: fail    # or: skip (continue without error on timeout)
+    payload:
+      transactionId: "TXN-42"
+      status: "approved"
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `event` | string | Event name / topic (dot-notation supported, e.g. `payment.processed`) |
+| `payload` | any | Arbitrary data attached to the event; available as `event.*` in `wait.event` match expressions |
+| `ack` | bool | If `true`, block until the broker acknowledges delivery (default: `false`) |
+| `timeout` | duration | Maximum time to wait for acknowledgement when `ack: true` |
+| `onTimeout` | `fail` \| `skip` | What to do when the ack deadline expires |
+
+The participant's output is an object with a single `ack` field:
+
+```yaml
+output: notify_ack.output.ack   # true when ack succeeded, false on timeout+skip
+```
+
+### `wait.event` Step
+
+Blocks the workflow until an event with the matching name arrives on the hub. An optional CEL `match` expression filters events by payload content.
+
+```yaml
+flow:
+  - wait:
+      event: order.created
+      match: "event.orderId == 'ORD-001'"   # optional CEL filter
+      timeout: 10s
+      onTimeout: fail                        # or: skip
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `event` | string | Event name to wait for |
+| `match` | CEL expression | Optional filter evaluated against the event payload (`event.*`) |
+| `timeout` | duration | How long to wait before invoking `onTimeout` |
+| `onTimeout` | `fail` \| `skip` | Behavior when the timeout elapses without a matching event |
+
+The received event payload becomes the chain value after the `wait` step and is accessible as `event.*` in subsequent CEL expressions.
+
+### Emit + Wait Pattern
+
+```yaml
+# examples/events.flow.yaml
+participants:
+  publish:
+    type: emit
+    event: order.created
+    payload:
+      orderId: "ORD-001"
+      total: 99.95
+
+flow:
+  - publish
+
+  - wait:
+      event: order.created
+      match: event.orderId == "ORD-001"
+      timeout: 5s
+      onTimeout: fail
+
+  - type: exec
+    run: echo "Received order ${orderId} with total ${total}"
+    input:
+      orderId: event.orderId
+      total: event.total
+
+output: event.orderId
+```
+
+```bash
+duckflux run examples/events.flow.yaml
+```
+
+### Acknowledged Emit Pattern
+
+```yaml
+# examples/events-ack.flow.yaml
+participants:
+  publisher:
+    type: emit
+    event: payment.processed
+    ack: true
+    timeout: 5s
+    onTimeout: fail
+    payload:
+      transactionId: "TXN-42"
+      status: "approved"
+
+flow:
+  - wait:
+      event: payment.processed
+      timeout: 5s
+      onTimeout: skip
+
+  - publisher
+
+output: publisher.output.ack
+```
+
+```bash
+duckflux run examples/events-ack.flow.yaml
+```
+
+### NATS Backend: Pre-creating Streams
+
+NATS JetStream stream names cannot contain dots, but duckflux event names use dot-notation (e.g. `payment.processed`). The runner handles this transparently by looking up the stream by subject (`StreamNameBySubject`) instead of by name.
+
+You must create streams before running. Replace dots with underscores in the stream name; use the original dot-notation event name as the subject:
+
+```bash
+nats stream add payment_processed \
+  --subjects "payment.processed" \
+  --storage file \
+  --replicas 1 \
+  --server nats://localhost:4222
+```
+
+Then run:
+
+```bash
+duckflux run workflow.flow.yaml \
+  --event-backend=nats \
+  --nats-url=nats://localhost:4222
+```
+
+### Sub-Workflow Hub Sharing
+
+The hub is shared recursively with all sub-workflows. An event emitted by the parent is visible to sub-workflows and vice versa — they all use the same underlying pub/sub bus.
+
+```yaml
+# parent.flow.yaml
+participants:
+  child:
+    type: workflow
+    path: child.flow.yaml
+
+  trigger:
+    type: emit
+    event: job.started
+    payload: {jobId: "42"}
+
+flow:
+  - trigger    # publishes job.started to the shared hub
+  - child      # child.flow.yaml can wait.event on job.started
+```
+
+To isolate a sub-workflow's events from the parent, run it as a separate `duckflux run` process instead of a `workflow` participant.
 
 ## Editor Support
 

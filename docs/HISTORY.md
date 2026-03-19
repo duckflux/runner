@@ -142,6 +142,45 @@ The schema now matches the model behavior: `output` may be either a single CEL e
 
 ---
 
+### 20. Event hub backed by Watermill with three backends: memory, NATS JetStream, Redis Streams
+**Date:** March 2026 · **By:** @ggondim (decision), @copilot (implementation)
+
+The `emit` participant type and `wait.event` step were stubs since v0.2. The decision was to implement a real event hub rather than a simple in-process channel, because the hub needs to support external brokers for distributed workflows.
+
+**Library chosen: [Watermill](https://watermill.io).** It provides a uniform `Publisher`/`Subscriber` interface over multiple brokers (GoChannel, NATS JetStream, Redis Streams, Kafka, etc.) and handles message serialisation, retry, and lifecycle. This avoided building a custom abstraction for each backend.
+
+The `internal/eventhub` package wraps Watermill behind a thin `Hub` type that the rest of the runner uses. Three backends are available:
+
+- **`memory`** (default): Watermill GoChannel — zero-dependency, persistent replay (messages buffered in memory), fan-out to multiple subscribers. Used when no `--event-backend` flag is supplied.
+- **`nats`**: NATS JetStream via `watermill-nats/v2`. Ephemeral consumers — no replay of pre-subscribe messages, but suitable for live event passing across processes.
+- **`redis`**: Redis Streams via `watermill-redisstream`. Consumer groups with `OldestId="0"` — persistent replay from stream start, fan-out via separate consumer groups.
+
+**Integration tests** use testcontainers-go to spin up real Docker containers (`nats:2.10`, `redis:7`) during `go test`. If Docker is not available, `testcontainers.SkipIfProviderIsNotHealthy` skips the tests gracefully rather than failing them.
+
+---
+
+### 21. NATS: dot-safe ephemeral consumer via `StreamNameBySubject`
+**Date:** March 2026 · **By:** @copilot
+
+**Problem:** duckflux event names use dot-notation (e.g. `payment.processed`). NATS subjects support dots, but JetStream *stream names* do not. The default `EphemeralConsumer` in watermill-nats v2.1.3 calls `js.Stream(ctx, topic)` — using the topic directly as a stream name — which NATS rejects for any event name containing a dot.
+
+**Solution:** a custom `ResourceInitializer` (`dotSafeEphemeralConsumer`) that uses `js.StreamNameBySubject(ctx, topic)` to look up the owning stream by subject. The subject lookup honours dot-notation, returns the stream name (which is the sanitised, dot-free name that the operator creates), and then fetches the stream with that safe name. The rest of the consumer lifecycle (create ephemeral, register cleanup) is unchanged.
+
+**Operator contract:** stream names are created with dots replaced by underscores (e.g. `payment_processed`) and the original event name set as the stream's subject filter. The runner handles the mapping transparently at subscribe time; workflows use the original dot-notation name throughout.
+
+---
+
+### 22. Sub-workflow hub sharing: parent hub propagated recursively via closure
+**Date:** March 2026 · **By:** @ggondim (decision), @copilot (implementation)
+
+Previously, `makeSubWorkflowRunner` passed `nil` as the hub to both `participant.BuildRegistry` and `engine.Run`, causing each sub-workflow execution to create its own isolated in-memory hub. Events emitted by the parent were invisible to sub-workflows and vice versa.
+
+**Decision:** share the parent hub with all sub-workflows. The hub is passed as a parameter to `makeSubWorkflowRunner` and captured in the returned closure, which propagates it to `BuildRegistry` (so `emit` participants inside the sub-workflow use the shared hub) and to `engine.Run` (so `wait.event` steps also use it). Recursive calls to `makeSubWorkflowRunner` for deeper nesting receive the same hub reference.
+
+No changes were needed to `SubWorkflowRunnerFunc`'s public signature — the hub travels via closure, keeping the interface stable. `engine.Run`'s `nil`-creates-memory-hub fallback is retained for unit tests that do not need an event hub.
+
+---
+
 ### 19. Working directory support for `exec` with explicit precedence
 **PR:** local (March 2026) · **By:** @copilot  
 `cwd` support was added at three levels: CLI (`duckflux run --cwd`), workflow defaults (`defaults.cwd`), and participant (`exec.cwd`). The effective working directory follows the precedence: `participant.cwd` > `defaults.cwd` > `--cwd` > process cwd. `exec.cwd` and `defaults.cwd` support CEL expressions; relative paths are resolved against the selected base working directory; execution uses `cmd.Dir`.
