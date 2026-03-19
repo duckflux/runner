@@ -6,17 +6,19 @@ import (
 	"time"
 
 	"github.com/duckflux/runner/internal/cel"
+	"github.com/duckflux/runner/internal/eventhub"
 	"github.com/duckflux/runner/internal/model"
 	"github.com/duckflux/runner/internal/participant"
 	gcel "github.com/google/cel-go/cel"
 )
 
 // runWait executes a wait step. It supports three modes:
-// 1) Event mode: wait.Event != "" (stubbed in v1). Sets state.EventPayload.
+// 1) Event mode: wait.Event != "" — subscribes via the event hub and blocks
+//    until a matching event arrives or the timeout is reached.
 // 2) Sleep mode: only Timeout is provided — sleeps until timeout or ctx cancel.
 // 3) Polling mode: Until + Poll + Timeout — periodically evaluates Until.
-func runWait(ctx context.Context, wf *model.Workflow, step *model.WaitStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry) error {
-	// Event mode: wait for matching event from internal hub.
+func runWait(ctx context.Context, wf *model.Workflow, step *model.WaitStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry, hub *eventhub.Hub) error {
+	// Event mode: wait for matching event from the hub.
 	if step.Event != "" {
 		var matchProg gcel.Program
 		var err error
@@ -27,8 +29,11 @@ func runWait(ctx context.Context, wf *model.Workflow, step *model.WaitStep, stat
 			}
 		}
 
-		subID, ch := state.SubscribeEvents()
-		defer state.UnsubscribeEvents(subID)
+		ch, cancelSub, err := hub.Subscribe(ctx, step.Event)
+		if err != nil {
+			return fmt.Errorf("wait: subscribing to event %q: %w", step.Event, err)
+		}
+		defer cancelSub()
 
 		var timeoutCh <-chan time.Time
 		if step.Timeout != nil {
@@ -42,8 +47,14 @@ func runWait(ctx context.Context, wf *model.Workflow, step *model.WaitStep, stat
 			case <-ctx.Done():
 				return ctx.Err()
 			case <-timeoutCh:
-				return handleWaitTimeout(ctx, wf, step, state, celEnv, reg)
-			case evt := <-ch:
+				return handleWaitTimeout(ctx, wf, step, state, celEnv, reg, hub)
+			case evt, ok := <-ch:
+				if !ok {
+					// Channel closed (subscription cancelled).
+					return ctx.Err()
+				}
+				// With Watermill the topic already filters by event name, but
+				// we check the envelope Name as well for safety.
 				if evt.Name != step.Event {
 					continue
 				}
@@ -106,7 +117,7 @@ func runWait(ctx context.Context, wf *model.Workflow, step *model.WaitStep, stat
 
 			// Check timeout
 			if !deadline.IsZero() && time.Now().After(deadline) {
-				return handleWaitTimeout(ctx, wf, step, state, celEnv, reg)
+				return handleWaitTimeout(ctx, wf, step, state, celEnv, reg, hub)
 			}
 
 			select {
@@ -121,14 +132,14 @@ func runWait(ctx context.Context, wf *model.Workflow, step *model.WaitStep, stat
 	return fmt.Errorf("wait: invalid wait configuration")
 }
 
-func handleWaitTimeout(ctx context.Context, wf *model.Workflow, step *model.WaitStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry) error {
+func handleWaitTimeout(ctx context.Context, wf *model.Workflow, step *model.WaitStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry, hub *eventhub.Hub) error {
 	switch step.OnTimeout {
 	case "", "fail":
 		return fmt.Errorf("wait: timeout reached")
 	case "skip":
 		return nil
 	default:
-		if _, err := runParticipantStep(ctx, wf, step.OnTimeout, &model.ParticipantOverrideStep{OnError: "fail"}, state, celEnv, reg, nil); err != nil {
+		if _, err := runParticipantStep(ctx, wf, step.OnTimeout, &model.ParticipantOverrideStep{OnError: "fail"}, state, celEnv, reg, hub, nil); err != nil {
 			return fmt.Errorf("wait: onTimeout redirect failed: %w", err)
 		}
 		return nil

@@ -182,7 +182,7 @@ func TestRunOnErrorRetrySucceedsAfterRetries(t *testing.T) {
 	})
 	reg := participant.Registry{"step1": p}
 
-	out, err := Run(context.Background(), wf, nil, nil, reg)
+	out, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestRunOnErrorRetryExhausted(t *testing.T) {
 	})
 	reg := participant.Registry{"step1": p}
 
-	_, err := Run(context.Background(), wf, nil, nil, reg)
+	_, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err == nil {
 		t.Fatal("Run() expected error after retry exhaustion, got nil")
 	}
@@ -241,7 +241,7 @@ func TestRunOnErrorRedirectSuccess(t *testing.T) {
 	reg := participant.Registry{"step1": step1, "fallback": fb}
 
 	// Redirect should succeed: workflow continues without error.
-	_, err := Run(context.Background(), wf, nil, nil, reg)
+	_, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestRunOnErrorRedirectFallbackAlsoFails(t *testing.T) {
 	})
 	reg := participant.Registry{"step1": step1, "fallback": fb}
 
-	_, err := Run(context.Background(), wf, nil, nil, reg)
+	_, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err == nil {
 		t.Fatal("Run() expected error when both step and fallback fail")
 	}
@@ -290,7 +290,7 @@ func TestRunRetryWithContextCancellation(t *testing.T) {
 	})
 	reg := participant.Registry{"step1": p}
 
-	_, err := Run(ctx, wf, nil, nil, reg)
+	_, err := Run(ctx, wf, nil, nil, reg, nil)
 	if err == nil {
 		t.Fatal("Run() expected error for cancelled context, got nil")
 	}

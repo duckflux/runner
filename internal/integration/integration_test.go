@@ -48,20 +48,20 @@ func runWorkflowWithContext(t *testing.T, ctx context.Context, yaml string, inpu
 			return nil, fmt.Errorf("parsing sub-workflow %q: %w", path, err)
 		}
 
-		reg, err := participant.BuildRegistry(subWF, wfEnv, runnerFn)
+		reg, err := participant.BuildRegistry(subWF, wfEnv, runnerFn, nil)
 		if err != nil {
 			return nil, fmt.Errorf("building registry for sub-workflow %q: %w", path, err)
 		}
 
-		return engine.Run(ctx, subWF, wfInputs, wfEnv, reg)
+		return engine.Run(ctx, subWF, wfInputs, wfEnv, reg, nil)
 	}
 
-	reg, err := participant.BuildRegistry(wf, env, runnerFn)
+	reg, err := participant.BuildRegistry(wf, env, runnerFn, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build registry: %w", err)
 	}
 
-	return engine.Run(ctx, wf, inputs, env, reg)
+	return engine.Run(ctx, wf, inputs, env, reg, nil)
 }
 
 // runWorkflowFile parses a workflow from a file path and executes it.

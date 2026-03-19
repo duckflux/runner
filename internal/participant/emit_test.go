@@ -15,7 +15,7 @@ func TestEmitExecute_ReturnsExpectedResult(t *testing.T) {
 		Ack:     true,
 	}
 
-	e := NewEmit(def)
+	e := NewEmit(def, nil)
 	res, err := e.Execute(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("emit Execute error: %v", err)

@@ -1,0 +1,38 @@
+id: events-example
+name: Events — emit and wait pattern
+version: "1"
+
+# Demonstrates the emit + wait.event pattern using the in-memory event hub
+# (default backend). The emitter step publishes an event, then wait.event
+# blocks until a matching event arrives.
+#
+# Run:
+#   duckflux run examples/events.flow.yaml
+
+participants:
+  publish:
+    type: emit
+    event: order.created
+    payload:
+      orderId: "ORD-001"
+      total: 99.95
+
+flow:
+  # 1. Publish the event
+  - publish
+
+  # 2. Wait for the same event (will be replayed from the in-memory hub)
+  - wait:
+      event: order.created
+      match: event.orderId == "ORD-001"
+      timeout: 5s
+      onTimeout: fail
+
+  # 3. Print result using the received event payload
+  - type: exec
+    run: echo "Received order ${orderId} with total ${total}"
+    input:
+      orderId: event.orderId
+      total: event.total
+
+output: event.orderId

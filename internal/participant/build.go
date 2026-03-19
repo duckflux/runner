@@ -3,6 +3,7 @@ package participant
 import (
 	"fmt"
 
+	"github.com/duckflux/runner/internal/eventhub"
 	"github.com/duckflux/runner/internal/model"
 )
 
@@ -13,11 +14,12 @@ import (
 // env is the process-level environment map (env.* values) forwarded to exec
 // and workflow participants. runnerFn is the sub-workflow execution callback
 // required by WorkflowParticipant; it must not be nil when any participant has
-// type "workflow".
-func BuildRegistry(wf *model.Workflow, env map[string]string, runnerFn SubWorkflowRunnerFunc) (Registry, error) {
+// type "workflow". hub is the event hub used by emit participants; it may be nil
+// in unit tests that do not exercise emit.
+func BuildRegistry(wf *model.Workflow, env map[string]string, runnerFn SubWorkflowRunnerFunc, hub *eventhub.Hub) (Registry, error) {
 	reg := make(Registry, len(wf.Participants))
 	for name, def := range wf.Participants {
-		p, err := buildOne(name, def, env, runnerFn)
+		p, err := buildOne(name, def, env, runnerFn, hub)
 		if err != nil {
 			return nil, fmt.Errorf("building participant %q: %w", name, err)
 		}
@@ -28,12 +30,12 @@ func BuildRegistry(wf *model.Workflow, env map[string]string, runnerFn SubWorkfl
 
 // BuildOne instantiates a single participant from its definition.
 // Exported so the engine can build anonymous inline participants on the fly.
-func BuildOne(def model.Participant, env map[string]string, runnerFn SubWorkflowRunnerFunc) (Participant, error) {
-	return buildOne("", def, env, runnerFn)
+func BuildOne(def model.Participant, env map[string]string, runnerFn SubWorkflowRunnerFunc, hub *eventhub.Hub) (Participant, error) {
+	return buildOne("", def, env, runnerFn, hub)
 }
 
 // buildOne instantiates a single participant from its definition.
-func buildOne(name string, def model.Participant, env map[string]string, runnerFn SubWorkflowRunnerFunc) (Participant, error) {
+func buildOne(name string, def model.Participant, env map[string]string, runnerFn SubWorkflowRunnerFunc, hub *eventhub.Hub) (Participant, error) {
 	switch def.Type {
 	case model.ParticipantTypeExec:
 		return NewExec(def, env), nil
@@ -48,7 +50,7 @@ func buildOne(name string, def model.Participant, env map[string]string, runnerF
 		return NewMCP(def), nil
 
 	case model.ParticipantTypeEmit:
-		return NewEmit(def), nil
+		return NewEmit(def, hub), nil
 
 	default:
 		return nil, fmt.Errorf("participant %q: unknown type %q", name, def.Type)

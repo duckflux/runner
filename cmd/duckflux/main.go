@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/duckflux/runner/internal/engine"
+	"github.com/duckflux/runner/internal/eventhub"
 	"github.com/duckflux/runner/internal/parser"
 	"github.com/duckflux/runner/internal/participant"
 )
@@ -24,9 +25,14 @@ var logLevel = new(slog.LevelVar)
 
 // run-command flags
 var (
-	runInputs    []string
-	runInputFile string
-	runCWD       string
+	runInputs      []string
+	runInputFile   string
+	runCWD         string
+	runEventBackend string
+	runNATSURL      string
+	runNATSStream   string
+	runRedisAddr    string
+	runRedisDB      int
 )
 
 var rootCmd = &cobra.Command{
@@ -148,6 +154,12 @@ func init() {
 	runCmd.Flags().StringArrayVar(&runInputs, "input", nil, "Input value as key=value (repeatable)")
 	runCmd.Flags().StringVar(&runInputFile, "input-file", "", "JSON file containing workflow inputs")
 	runCmd.Flags().StringVar(&runCWD, "cwd", "", "Base working directory for workflow execution")
+	// event hub flags
+	runCmd.Flags().StringVar(&runEventBackend, "event-backend", "memory", "Event hub backend: memory, nats, or redis")
+	runCmd.Flags().StringVar(&runNATSURL, "nats-url", "", "NATS server URL (required when --event-backend=nats)")
+	runCmd.Flags().StringVar(&runNATSStream, "nats-stream", "duckflux-events", "NATS JetStream stream name")
+	runCmd.Flags().StringVar(&runRedisAddr, "redis-addr", "localhost:6379", "Redis server address")
+	runCmd.Flags().IntVar(&runRedisDB, "redis-db", 0, "Redis database number")
 
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(lintCmd)
@@ -237,23 +249,43 @@ func runWorkflow(cmd *cobra.Command, args []string) error {
 	// ── 3. Collect process environment ──────────────────────────────────────
 	env := collectEnv()
 
-	// ── 4. Build participant registry ────────────────────────────────────────
+	// ── 4. Create event hub ──────────────────────────────────────────────────
+	if runEventBackend == "nats" && runNATSURL == "" {
+		return fmt.Errorf("--nats-url is required when --event-backend=nats")
+	}
+	hub, err := eventhub.New(eventhub.Config{
+		Backend: runEventBackend,
+		NATS: eventhub.NATSConfig{
+			URL:        runNATSURL,
+			StreamName: runNATSStream,
+		},
+		Redis: eventhub.RedisConfig{
+			Addr: runRedisAddr,
+			DB:   runRedisDB,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("creating event hub: %w", err)
+	}
+	defer hub.Close()
+
+	// ── 5. Build participant registry ────────────────────────────────────────
 	slog.Debug("building participant registry")
-	runnerFn := makeSubWorkflowRunner(filepath.Dir(filePath))
-	reg, err := participant.BuildRegistry(wf, env, runnerFn)
+	runnerFn := makeSubWorkflowRunner(filepath.Dir(filePath), hub)
+	reg, err := participant.BuildRegistry(wf, env, runnerFn, hub)
 	if err != nil {
 		return fmt.Errorf("building participant registry: %w", err)
 	}
 
-	// ── 5. Execute ──────────────────────────────────────────────────────────
+	// ── 6. Execute ──────────────────────────────────────────────────────────
 	slog.Info("running workflow", "id", wf.ID)
-	out, err := engine.Run(runCtx, wf, inputs, env, reg)
+	out, err := engine.Run(runCtx, wf, inputs, env, reg, hub)
 	if err != nil {
 		return fmt.Errorf("workflow execution failed: %w", err)
 	}
 	slog.Info("workflow completed", "id", wf.ID)
 
-	// ── 6. Print output ──────────────────────────────────────────────────────
+	// ── 7. Print output ──────────────────────────────────────────────────────
 	return printOutput(cmd, out)
 }
 
@@ -351,7 +383,9 @@ func collectEnv() map[string]string {
 // participant → engine import cycle by living in the cmd layer.
 // callerDir is the directory of the workflow that contains the sub-workflow
 // reference; relative paths are resolved against it.
-func makeSubWorkflowRunner(callerDir string) participant.SubWorkflowRunnerFunc {
+// hub is the parent's event hub and is shared with all sub-workflows so that
+// events published by the parent are visible to sub-workflows and vice versa.
+func makeSubWorkflowRunner(callerDir string, hub *eventhub.Hub) participant.SubWorkflowRunnerFunc {
 	return func(ctx context.Context, path string, inputs map[string]any, env map[string]string) (any, error) {
 		// Resolve the path relative to the calling workflow's directory when it
 		// is not an absolute path, so that sub-workflows can be co-located with
@@ -372,14 +406,15 @@ func makeSubWorkflowRunner(callerDir string) participant.SubWorkflowRunnerFunc {
 		}
 
 		// Build the nested runner using the sub-workflow's own directory so that
-		// any further nesting resolves paths correctly.
-		subRunnerFn := makeSubWorkflowRunner(filepath.Dir(path))
-		reg, err := participant.BuildRegistry(wf, env, subRunnerFn)
+		// any further nesting resolves paths correctly. The hub is propagated
+		// recursively so all levels share the same event bus.
+		subRunnerFn := makeSubWorkflowRunner(filepath.Dir(path), hub)
+		reg, err := participant.BuildRegistry(wf, env, subRunnerFn, hub)
 		if err != nil {
 			return nil, fmt.Errorf("building registry for sub-workflow %q: %w", path, err)
 		}
 
-		return engine.Run(ctx, wf, inputs, env, reg)
+		return engine.Run(ctx, wf, inputs, env, reg, hub)
 	}
 }
 

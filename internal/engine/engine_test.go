@@ -322,7 +322,7 @@ func TestRunSingleStep(t *testing.T) {
 	}
 	reg := participant.Registry{"step1": mp}
 
-	out, err := Run(context.Background(), wf, nil, nil, reg)
+	out, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestRunJSONAutoDetection(t *testing.T) {
 	}
 	reg := participant.Registry{"step1": mp}
 
-	out, err := Run(context.Background(), wf, nil, nil, reg)
+	out, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -369,7 +369,7 @@ func TestRunInputMapping(t *testing.T) {
 	}
 	reg := participant.Registry{"step1": mp}
 
-	_, err := Run(context.Background(), wf, map[string]any{"branch": "feat"}, nil, reg)
+	_, err := Run(context.Background(), wf, map[string]any{"branch": "feat"}, nil, reg, nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -390,7 +390,7 @@ func TestRunExplicitOutputExpression(t *testing.T) {
 	}
 	reg := participant.Registry{"step1": mp}
 
-	out, err := Run(context.Background(), wf, nil, nil, reg)
+	out, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -419,7 +419,7 @@ func TestRunExplicitOutputMap(t *testing.T) {
 	}
 	reg := participant.Registry{"step1": mp}
 
-	out, err := Run(context.Background(), wf, nil, nil, reg)
+	out, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -446,7 +446,7 @@ func TestRunStepFailWithOnErrorFail(t *testing.T) {
 	}
 	reg := participant.Registry{"step1": mp}
 
-	_, err := Run(context.Background(), wf, nil, nil, reg)
+	_, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err == nil {
 		t.Fatal("Run() expected error, got nil")
 	}
@@ -468,7 +468,7 @@ func TestRunStepFailWithOnErrorSkip(t *testing.T) {
 	}
 	reg := participant.Registry{"step1": mp1, "step2": mp2}
 
-	out, err := Run(context.Background(), wf, nil, nil, reg)
+	out, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -495,7 +495,7 @@ func TestRunWhenGuardSkipsStep(t *testing.T) {
 	}
 	reg := participant.Registry{"step1": mp}
 
-	_, err := Run(context.Background(), wf, nil, nil, reg)
+	_, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -519,7 +519,7 @@ func TestRunDefaultsOnError(t *testing.T) {
 	reg := participant.Registry{"step1": mp}
 
 	// With defaults.onError = "skip", the step failure is swallowed.
-	_, err := Run(context.Background(), wf, nil, nil, reg)
+	_, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err != nil {
 		t.Fatalf("Run() expected no error with defaults.onError=skip, got: %v", err)
 	}
@@ -547,7 +547,7 @@ func TestRunMultipleSteps(t *testing.T) {
 		"step2": makeMP("step2"),
 	}
 
-	out, err := Run(context.Background(), wf, nil, nil, reg)
+	out, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -568,7 +568,7 @@ func TestRunMissingParticipantInRegistry(t *testing.T) {
 	// Registry is empty — no implementation provided.
 	reg := participant.Registry{}
 
-	_, err := Run(context.Background(), wf, nil, nil, reg)
+	_, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err == nil {
 		t.Fatal("Run() expected error for missing registry entry, got nil")
 	}
@@ -587,7 +587,7 @@ func TestRunEnvVariablePassedToState(t *testing.T) {
 
 	// We can't observe state.Env directly from the test, but we can verify that
 	// Run does not error when env is provided.
-	_, err := Run(context.Background(), wf, nil, map[string]string{"TOKEN": "secret"}, reg)
+	_, err := Run(context.Background(), wf, nil, map[string]string{"TOKEN": "secret"}, reg, nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -612,7 +612,7 @@ func TestRunLoopMaxIterations(t *testing.T) {
 	}
 	reg := participant.Registry{"step1": counter}
 
-	_, err := Run(context.Background(), wf, nil, nil, reg)
+	_, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -640,7 +640,7 @@ func TestRunLoopUntilCondition(t *testing.T) {
 	}
 	reg := participant.Registry{"step1": counter}
 
-	_, err := Run(context.Background(), wf, nil, nil, reg)
+	_, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -681,7 +681,7 @@ func TestRunLoopContextFirst(t *testing.T) {
 	}
 	reg := participant.Registry{"step1": tracker}
 
-	_, err := Run(context.Background(), wf, nil, nil, reg)
+	_, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -708,7 +708,7 @@ func TestRunLoopNoUntilNoMaxErrors(t *testing.T) {
 	}
 	reg := participant.Registry{"step1": mp}
 
-	_, err := Run(context.Background(), wf, nil, nil, reg)
+	_, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err == nil {
 		t.Fatal("Run() expected error for loop with neither until nor max, got nil")
 	}
@@ -735,7 +735,7 @@ func TestRunParallelBothStepsExecuted(t *testing.T) {
 	}
 	reg := participant.Registry{"step1": mp1, "step2": mp2}
 
-	out, err := Run(context.Background(), wf, nil, nil, reg)
+	out, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -766,7 +766,7 @@ func TestRunParallelOneFailCancelsOthers(t *testing.T) {
 	}
 	reg := participant.Registry{"step1": mp1, "step2": mp2}
 
-	_, err := Run(context.Background(), wf, nil, nil, reg)
+	_, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err == nil {
 		t.Fatal("Run() expected error when parallel branch fails, got nil")
 	}
@@ -782,7 +782,7 @@ func TestRunParallelEmpty(t *testing.T) {
 	}
 	reg := participant.Registry{}
 
-	_, err := Run(context.Background(), wf, nil, nil, reg)
+	_, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err != nil {
 		t.Fatalf("Run() error for empty parallel: %v", err)
 	}
@@ -809,7 +809,7 @@ func TestRunIfThenBranchExecuted(t *testing.T) {
 	}
 	reg := participant.Registry{"thenStep": mpThen, "elseStep": mpElse}
 
-	_, err := Run(context.Background(), wf, nil, nil, reg)
+	_, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -837,7 +837,7 @@ func TestRunIfElseBranchExecuted(t *testing.T) {
 	}
 	reg := participant.Registry{"thenStep": mpThen, "elseStep": mpElse}
 
-	_, err := Run(context.Background(), wf, nil, nil, reg)
+	_, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -862,7 +862,7 @@ func TestRunIfNoElseFalseConditionIsNoop(t *testing.T) {
 	}
 	reg := participant.Registry{"step1": mp}
 
-	_, err := Run(context.Background(), wf, nil, nil, reg)
+	_, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -893,7 +893,7 @@ func TestRunIfConditionUsesInputVariable(t *testing.T) {
 	}
 	reg := participant.Registry{"deploy": mpThen, "skipDeploy": mpElse}
 
-	_, err := Run(context.Background(), wf, nil, nil, reg)
+	_, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -920,7 +920,7 @@ func TestRunWhenGuardTrueExecutesStep(t *testing.T) {
 	}
 	reg := participant.Registry{"step1": mp}
 
-	_, err := Run(context.Background(), wf, nil, nil, reg)
+	_, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -1009,7 +1009,7 @@ func TestRunTimeoutCausesStepFailure(t *testing.T) {
 	}
 	reg := participant.Registry{"step1": bp}
 
-	_, err := Run(context.Background(), wf, nil, nil, reg)
+	_, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err == nil {
 		t.Fatal("Run() expected error due to timeout, got nil")
 	}
@@ -1032,7 +1032,7 @@ func TestRunTimeoutWithOnErrorSkipContinues(t *testing.T) {
 	}
 	reg := participant.Registry{"step1": bp, "step2": mp2}
 
-	out, err := Run(context.Background(), wf, nil, nil, reg)
+	out, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err != nil {
 		t.Fatalf("Run() expected no error with onError=skip, got: %v", err)
 	}
@@ -1060,7 +1060,7 @@ func TestRunTimeoutViaFlowOverride(t *testing.T) {
 	}
 	reg := participant.Registry{"step1": bp}
 
-	_, err := Run(context.Background(), wf, nil, nil, reg)
+	_, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err == nil {
 		t.Fatal("Run() expected error due to flow-override timeout, got nil")
 	}
@@ -1079,7 +1079,7 @@ func TestRunTimeoutViaDefaults(t *testing.T) {
 	}
 	reg := participant.Registry{"step1": bp}
 
-	_, err := Run(context.Background(), wf, nil, nil, reg)
+	_, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err == nil {
 		t.Fatal("Run() expected error due to defaults timeout, got nil")
 	}
@@ -1133,7 +1133,7 @@ func TestRunSubWorkflowComposition(t *testing.T) {
 		name, _ := inputs["name"].(string)
 		childMock.output = "hello, " + name
 		childReg := participant.Registry{"greet": childMock}
-		return Run(ctx, childWF, inputs, env, childReg)
+		return Run(ctx, childWF, inputs, env, childReg, nil)
 	})
 
 	// Build the workflow participant and add it to the parent registry.
@@ -1156,7 +1156,7 @@ func TestRunSubWorkflowComposition(t *testing.T) {
 	}
 	parentReg := participant.Registry{"sub": subWFParticipant}
 
-	out, err := Run(context.Background(), parentWF, nil, nil, parentReg)
+	out, err := Run(context.Background(), parentWF, nil, nil, parentReg, nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
@@ -1183,7 +1183,7 @@ func TestRunSubWorkflowErrorPropagated(t *testing.T) {
 	}
 	parentReg := participant.Registry{"sub": subWFParticipant}
 
-	_, err := Run(context.Background(), parentWF, nil, nil, parentReg)
+	_, err := Run(context.Background(), parentWF, nil, nil, parentReg, nil)
 	if err == nil {
 		t.Fatal("Run() expected error from failed sub-workflow, got nil")
 	}
@@ -1227,7 +1227,7 @@ func TestRunIfNonBoolConditionErrors(t *testing.T) {
 	}
 	reg := participant.Registry{"step1": mp}
 
-	_, err := Run(context.Background(), wf, nil, nil, reg)
+	_, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err == nil {
 		t.Fatal("Run() expected error for non-bool if condition, got nil")
 	}
@@ -1253,7 +1253,7 @@ func TestRunWhenNonBoolErrors(t *testing.T) {
 	}
 	reg := participant.Registry{"step1": mp}
 
-	_, err := Run(context.Background(), wf, nil, nil, reg)
+	_, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err == nil {
 		t.Fatal("Run() expected error for non-bool when guard, got nil")
 	}
@@ -1280,7 +1280,7 @@ func TestRunLoopUntilNonBoolErrors(t *testing.T) {
 	}
 	reg := participant.Registry{"step1": mp}
 
-	_, err := Run(context.Background(), wf, nil, nil, reg)
+	_, err := Run(context.Background(), wf, nil, nil, reg, nil)
 	if err == nil {
 		t.Fatal("Run() expected error for non-bool loop.until, got nil")
 	}
@@ -1307,7 +1307,7 @@ func TestRunStepResultHasTimingFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEnv: %v", err)
 	}
-	_, _, runErr := runSequential(context.Background(), wf, wf.Flow, state, celEnv, reg, nil)
+	_, _, runErr := runSequential(context.Background(), wf, wf.Flow, state, celEnv, reg, nil, nil)
 	if runErr != nil {
 		t.Fatalf("runSequential: %v", runErr)
 	}
@@ -1343,7 +1343,7 @@ func TestRunStepResultHasErrorOnFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEnv: %v", err)
 	}
-	_, _, runErr := runSequential(context.Background(), wf, wf.Flow, state, celEnv, reg, nil)
+	_, _, runErr := runSequential(context.Background(), wf, wf.Flow, state, celEnv, reg, nil, nil)
 	if runErr != nil {
 		t.Fatalf("runSequential: %v", runErr)
 	}

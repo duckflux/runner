@@ -18,7 +18,7 @@ func TestRunWait_SleepMode(t *testing.T) {
 		t.Fatalf("cel env: %v", err)
 	}
 	ctx := context.Background()
-	if err := runWait(ctx, wf, step, state, celEnv, nil); err != nil {
+	if err := runWait(ctx, wf, step, state, celEnv, nil, nil); err != nil {
 		t.Fatalf("runWait sleep returned error: %v", err)
 	}
 }
@@ -32,7 +32,7 @@ func TestRunWait_PollingModeImmediateTrue(t *testing.T) {
 		t.Fatalf("cel env: %v", err)
 	}
 	ctx := context.Background()
-	if err := runWait(ctx, wf, step, state, celEnv, nil); err != nil {
+	if err := runWait(ctx, wf, step, state, celEnv, nil, nil); err != nil {
 		t.Fatalf("runWait polling returned error: %v", err)
 	}
 }

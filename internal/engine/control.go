@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/duckflux/runner/internal/cel"
+	"github.com/duckflux/runner/internal/eventhub"
 	"github.com/duckflux/runner/internal/model"
 	"github.com/duckflux/runner/internal/participant"
 )
@@ -21,7 +22,7 @@ import (
 // The loop context (loop.index, loop.iteration, loop.first, loop.last) is set
 // on state before each iteration and restored to its previous value when the
 // loop exits, enabling correct semantics for nested loops.
-func runLoop(ctx context.Context, wf *model.Workflow, step *model.LoopStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry, chain any) (any, error) {
+func runLoop(ctx context.Context, wf *model.Workflow, step *model.LoopStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry, hub *eventhub.Hub, chain any) (any, error) {
 	// Pre-compile the until expression once if provided.
 	var hasUntil bool
 	untilExpr := step.Until
@@ -66,7 +67,7 @@ func runLoop(ctx context.Context, wf *model.Workflow, step *model.LoopStep, stat
 			body = rewriteFlowStepsForLoopAs(step.Steps, step.As)
 		}
 		// Chain entering iteration N is the result of iteration N-1.
-		_, newChain, err := runSequential(ctx, wf, body, state, celEnv, reg, chain)
+		_, newChain, err := runSequential(ctx, wf, body, state, celEnv, reg, hub, chain)
 		if err != nil {
 			return nil, err
 		}
@@ -162,7 +163,7 @@ func resolveLoopMax(raw interface{}, state *cel.State, celEnv *cel.Environment, 
 // goroutines: if any branch fails, cancel is called so that still-running
 // branches are signalled to stop. The first error encountered is returned.
 // Writes to state.Steps are made thread-safely via state.SetStep.
-func runParallel(ctx context.Context, wf *model.Workflow, step *model.ParallelStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry, chain any) (any, error) {
+func runParallel(ctx context.Context, wf *model.Workflow, step *model.ParallelStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry, hub *eventhub.Hub, chain any) (any, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -175,7 +176,7 @@ func runParallel(ctx context.Context, wf *model.Workflow, step *model.ParallelSt
 		go func(idx int, b model.FlowStep) {
 			defer wg.Done()
 			// Each branch starts with the same incoming chain.
-			_, branchChain, err := runSequential(ctx, wf, []model.FlowStep{b}, state, celEnv, reg, chain)
+			_, branchChain, err := runSequential(ctx, wf, []model.FlowStep{b}, state, celEnv, reg, hub, chain)
 			if err != nil {
 				errs[idx] = err
 				cancel()
@@ -199,7 +200,7 @@ func runParallel(ctx context.Context, wf *model.Workflow, step *model.ParallelSt
 // runIf evaluates the CEL condition and executes either the then or the else
 // branch. It returns the name of the last participant executed (if any), which
 // may propagate up as the implicit workflow output.
-func runIf(ctx context.Context, wf *model.Workflow, step *model.IfStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry, chain any) (string, any, error) {
+func runIf(ctx context.Context, wf *model.Workflow, step *model.IfStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry, hub *eventhub.Hub, chain any) (string, any, error) {
 	prog, err := celEnv.Compile(step.Condition)
 	if err != nil {
 		return "", nil, fmt.Errorf("if: compiling condition: %w", err)
@@ -211,13 +212,13 @@ func runIf(ctx context.Context, wf *model.Workflow, step *model.IfStep, state *c
 	}
 
 	if cond, ok := result.(bool); ok && cond {
-		name, branchChain, err := runSequential(ctx, wf, step.Then, state, celEnv, reg, chain)
+		name, branchChain, err := runSequential(ctx, wf, step.Then, state, celEnv, reg, hub, chain)
 		return name, branchChain, err
 	} else if !ok {
 		return "", nil, fmt.Errorf("if: condition must evaluate to bool, got %T", result)
 	}
 	if len(step.Else) > 0 {
-		name, branchChain, err := runSequential(ctx, wf, step.Else, state, celEnv, reg, chain)
+		name, branchChain, err := runSequential(ctx, wf, step.Else, state, celEnv, reg, hub, chain)
 		return name, branchChain, err
 	}
 	// False branch without else: chain unchanged.

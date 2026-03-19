@@ -1,0 +1,33 @@
+id: events-ack-example
+name: Events — acknowledged emit
+version: "1"
+
+# Demonstrates emit with ack:true. The runner blocks until the in-memory
+# hub confirms the message has been delivered. onTimeout controls whether a
+# publish timeout causes the workflow to fail ("fail") or continue ("skip").
+#
+# Run:
+#   duckflux run examples/events-ack.flow.yaml
+
+participants:
+  publisher:
+    type: emit
+    event: payment.processed
+    ack: true
+    timeout: 5s
+    onTimeout: fail
+    payload:
+      transactionId: "TXN-42"
+      status: "approved"
+
+flow:
+  # 1. Subscribe before publishing so the ack-delivery succeeds
+  - wait:
+      event: payment.processed
+      timeout: 5s
+      onTimeout: skip
+
+  # 2. Acknowledged publish — blocks until the hub confirms delivery
+  - publisher
+
+output: publisher.output.ack

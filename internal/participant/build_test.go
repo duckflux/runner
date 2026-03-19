@@ -15,7 +15,7 @@ func TestBuildRegistryExec(t *testing.T) {
 			"greeter": {Type: model.ParticipantTypeExec, Run: "echo hello"},
 		},
 	}
-	reg, err := BuildRegistry(wf, nil, nil)
+	reg, err := BuildRegistry(wf, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("BuildRegistry() error: %v", err)
 	}
@@ -33,7 +33,7 @@ func TestBuildRegistryHTTP(t *testing.T) {
 			"api": {Type: model.ParticipantTypeHTTP, URL: "http://example.com"},
 		},
 	}
-	reg, err := BuildRegistry(wf, nil, nil)
+	reg, err := BuildRegistry(wf, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("BuildRegistry() error: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestBuildRegistryWorkflowParticipant(t *testing.T) {
 			"sub": {Type: model.ParticipantTypeWorkflow, Path: "sub.flow.yaml"},
 		},
 	}
-	reg, err := BuildRegistry(wf, nil, stub)
+	reg, err := BuildRegistry(wf, nil, stub, nil)
 	if err != nil {
 		t.Fatalf("BuildRegistry() error: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestBuildRegistryMCP(t *testing.T) {
 			"tool": {Type: model.ParticipantTypeMCP},
 		},
 	}
-	reg, err := BuildRegistry(wf, nil, nil)
+	reg, err := BuildRegistry(wf, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("BuildRegistry() error: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestBuildRegistryEmit(t *testing.T) {
 			"evt": {Type: model.ParticipantTypeEmit, Event: "build.done"},
 		},
 	}
-	reg, err := BuildRegistry(wf, nil, nil)
+	reg, err := BuildRegistry(wf, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("BuildRegistry() error: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestBuildRegistryUnknownTypeReturnsError(t *testing.T) {
 			"mystery": {Type: "unknown"},
 		},
 	}
-	_, err := BuildRegistry(wf, nil, nil)
+	_, err := BuildRegistry(wf, nil, nil, nil)
 	if err == nil {
 		t.Fatal("BuildRegistry() expected error for unknown type, got nil")
 	}
@@ -111,7 +111,7 @@ func TestBuildRegistryWorkflowParticipantEmptyPath(t *testing.T) {
 	stub := func(_ context.Context, _ string, _ map[string]any, _ map[string]string) (any, error) {
 		return nil, nil
 	}
-	_, err := BuildRegistry(wf, nil, stub)
+	_, err := BuildRegistry(wf, nil, stub, nil)
 	if err == nil {
 		t.Fatal("BuildRegistry() expected error for workflow with empty path, got nil")
 	}
@@ -121,7 +121,7 @@ func TestBuildRegistryEmpty(t *testing.T) {
 	wf := &model.Workflow{
 		Participants: map[string]model.Participant{},
 	}
-	reg, err := BuildRegistry(wf, nil, nil)
+	reg, err := BuildRegistry(wf, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("BuildRegistry() unexpected error: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestBuildRegistryPropagatesEnvToExec(t *testing.T) {
 		},
 	}
 	extraEnv := map[string]string{"MY_VAR": "hello"}
-	reg, err := BuildRegistry(wf, extraEnv, nil)
+	reg, err := BuildRegistry(wf, extraEnv, nil, nil)
 	if err != nil {
 		t.Fatalf("BuildRegistry() error: %v", err)
 	}

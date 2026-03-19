@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/duckflux/runner/internal/cel"
+	"github.com/duckflux/runner/internal/eventhub"
 	"github.com/duckflux/runner/internal/model"
 	"github.com/duckflux/runner/internal/participant"
 )
@@ -33,10 +34,10 @@ func withStepTimeout(ctx context.Context, def model.Participant, override *model
 // It propagates a chain value between steps: the output of step N becomes the
 // implicit input of step N+1. It returns the final chain value and the name of
 // the last participant step that was executed (not skipped).
-func runSequential(ctx context.Context, wf *model.Workflow, steps []model.FlowStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry, chain any) (string, any, error) {
+func runSequential(ctx context.Context, wf *model.Workflow, steps []model.FlowStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry, hub *eventhub.Hub, chain any) (string, any, error) {
 	var lastStep string
 	for _, step := range steps {
-		name, newChain, err := runFlowStep(ctx, wf, step, state, celEnv, reg, chain)
+		name, newChain, err := runFlowStep(ctx, wf, step, state, celEnv, reg, hub, chain)
 		if err != nil {
 			return "", nil, err
 		}
@@ -53,10 +54,10 @@ func runSequential(ctx context.Context, wf *model.Workflow, steps []model.FlowSt
 // runFlowStep dispatches a single flow step to its appropriate handler and
 // returns the participant name that was executed (empty for control-flow steps),
 // and the new chain value (output of the step).
-func runFlowStep(ctx context.Context, wf *model.Workflow, step model.FlowStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry, chain any) (string, any, error) {
+func runFlowStep(ctx context.Context, wf *model.Workflow, step model.FlowStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry, hub *eventhub.Hub, chain any) (string, any, error) {
 	switch {
 	case step.Participant != "":
-		out, err := runParticipantStep(ctx, wf, step.Participant, nil, state, celEnv, reg, chain)
+		out, err := runParticipantStep(ctx, wf, step.Participant, nil, state, celEnv, reg, hub, chain)
 		if err != nil {
 			return "", nil, err
 		}
@@ -64,31 +65,31 @@ func runFlowStep(ctx context.Context, wf *model.Workflow, step model.FlowStep, s
 
 	case step.Override != nil:
 		name := step.Override.Participant
-		out, err := runParticipantStep(ctx, wf, name, step.Override, state, celEnv, reg, chain)
+		out, err := runParticipantStep(ctx, wf, name, step.Override, state, celEnv, reg, hub, chain)
 		if err != nil {
 			return "", nil, err
 		}
 		return name, out, nil
 
 	case step.Loop != nil:
-		loopChain, err := runLoop(ctx, wf, step.Loop, state, celEnv, reg, chain)
+		loopChain, err := runLoop(ctx, wf, step.Loop, state, celEnv, reg, hub, chain)
 		if err != nil {
 			return "", nil, err
 		}
 		return "", loopChain, nil
 
 	case step.Parallel != nil:
-		parallelOut, err := runParallel(ctx, wf, step.Parallel, state, celEnv, reg, chain)
+		parallelOut, err := runParallel(ctx, wf, step.Parallel, state, celEnv, reg, hub, chain)
 		if err != nil {
 			return "", nil, err
 		}
 		return "", parallelOut, nil
 
 	case step.If != nil:
-		return runIf(ctx, wf, step.If, state, celEnv, reg, chain)
+		return runIf(ctx, wf, step.If, state, celEnv, reg, hub, chain)
 
 	case step.Wait != nil:
-		if err := runWait(ctx, wf, step.Wait, state, celEnv, reg); err != nil {
+		if err := runWait(ctx, wf, step.Wait, state, celEnv, reg, hub); err != nil {
 			return "", nil, err
 		}
 		// wait does not produce output; chain unchanged
@@ -96,7 +97,7 @@ func runFlowStep(ctx context.Context, wf *model.Workflow, step model.FlowStep, s
 
 	case step.InlineParticipant != nil:
 		def := *step.InlineParticipant
-		out, err := runInlineParticipant(ctx, wf, &def, state, celEnv, reg, chain)
+		out, err := runInlineParticipant(ctx, wf, &def, state, celEnv, reg, hub, chain)
 		if err != nil {
 			return "", nil, err
 		}
@@ -112,7 +113,7 @@ func runFlowStep(ctx context.Context, wf *model.Workflow, step model.FlowStep, s
 // expressions, invokes Execute, and stores the result in state.Steps.
 // chain is the implicit I/O chain value from the previous step.
 // Returns the step output (for chain propagation) and any error.
-func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, override *model.ParticipantOverrideStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry, chain any) (any, error) {
+func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, override *model.ParticipantOverrideStep, state *cel.State, celEnv *cel.Environment, reg participant.Registry, hub *eventhub.Hub, chain any) (any, error) {
 	def, ok := wf.Participants[name]
 	if !ok {
 		return nil, fmt.Errorf("participant %q not found in workflow definition", name)
@@ -179,8 +180,6 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 
 	// Resolve runtime participant fields for types that support dynamic values.
 	execParticipant := p
-	var emitEventName string
-	var emitPayload any
 	switch def.Type {
 	case model.ParticipantTypeHTTP:
 		resolvedDef, err := resolveHTTPDefinition(def, state, celEnv)
@@ -213,13 +212,9 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 		if err != nil {
 			return nil, fmt.Errorf("participant %q: resolving emit payload: %w", name, err)
 		}
-		emitEventName = resolvedDef.Event
-		emitPayload = resolvedDef.Payload
-		if ep, ok := p.(*participant.EmitParticipant); ok {
-			execParticipant = ep.WithDefinition(resolvedDef)
-		} else {
-			execParticipant = participant.NewEmit(resolvedDef)
-		}
+		// Always create a new EmitParticipant with the current engine hub, so
+		// that emit steps work correctly even when BuildRegistry received a nil hub.
+		execParticipant = participant.NewEmit(resolvedDef, hub)
 	}
 
 	// Apply timeout: derive a child context with the resolved deadline, if any.
@@ -292,7 +287,7 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 				CWD:        effectiveCWD,
 			})
 			fallbackOverride := &model.ParticipantOverrideStep{OnError: "fail"}
-			if _, redirectErr := runParticipantStep(ctx, wf, onErr, fallbackOverride, state, celEnv, reg, chain); redirectErr != nil {
+			if _, redirectErr := runParticipantStep(ctx, wf, onErr, fallbackOverride, state, celEnv, reg, hub, chain); redirectErr != nil {
 				return nil, fmt.Errorf("participant %q failed and fallback %q also failed: %w", name, onErr, redirectErr)
 			}
 			return nil, nil
@@ -315,9 +310,6 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 		Duration:   durationStr,
 		CWD:        effectiveCWD,
 	})
-	if emitEventName != "" {
-		state.PublishEvent(emitEventName, emitPayload)
-	}
 	return out, nil
 }
 
@@ -325,17 +317,17 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 // set, the step result is stored under that name. For anonymous inline
 // participants (no `As`), the step runs and contributes to the chain but does
 // not create a named binding.
-func runInlineParticipant(ctx context.Context, wf *model.Workflow, def *model.Participant, state *cel.State, celEnv *cel.Environment, reg participant.Registry, chain any) (any, error) {
+func runInlineParticipant(ctx context.Context, wf *model.Workflow, def *model.Participant, state *cel.State, celEnv *cel.Environment, reg participant.Registry, hub *eventhub.Hub, chain any) (any, error) {
 	if def.As != "" {
 		// Named inline: delegate to runParticipantStep via the synthetic name.
 		override := &model.ParticipantOverrideStep{
 			When: def.When,
 		}
-		return runParticipantStep(ctx, wf, def.As, override, state, celEnv, reg, chain)
+		return runParticipantStep(ctx, wf, def.As, override, state, celEnv, reg, hub, chain)
 	}
 
 	// Anonymous inline: build a one-off participant and execute directly.
-	p, err := participant.BuildOne(*def, state.Env, nil)
+	p, err := participant.BuildOne(*def, state.Env, nil, hub)
 	if err != nil {
 		return nil, fmt.Errorf("building anonymous inline participant: %w", err)
 	}

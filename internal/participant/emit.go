@@ -3,50 +3,62 @@ package participant
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"github.com/duckflux/runner/internal/eventhub"
 	"github.com/duckflux/runner/internal/model"
 )
 
-// EmitParticipant is a minimal implementation of the "emit" participant
-// type. In v1 this is a stub: it logs the event and returns success.
+// EmitParticipant publishes a named event to the event hub.
 //
-// TODO(v0.3.x): Implement acknowledged-timeout behavior for ack:true mode.
-// When the event hub integration is built, emit with ack:true + timeout should
-// respect onTimeout (fail/skip). Currently deferred because the event hub is stubbed.
+// When Ack is true, it waits for the publish to be confirmed (using the
+// participant timeout from the step context). If the ack times out:
+//   - OnTimeout == "skip" → returns success with ack:false in the result
+//   - OnTimeout == "" or "fail" (default) → returns an error
 type EmitParticipant struct {
 	def model.Participant
+	hub *eventhub.Hub
 }
 
-// NewEmit constructs an EmitParticipant from a participant definition.
-func NewEmit(def model.Participant) *EmitParticipant {
-	return &EmitParticipant{def: def}
+// NewEmit constructs an EmitParticipant from a participant definition and a
+// Hub reference. hub may be nil in tests that do not require real pub/sub.
+func NewEmit(def model.Participant, hub *eventhub.Hub) *EmitParticipant {
+	return &EmitParticipant{def: def, hub: hub}
 }
 
-// WithDefinition returns a copy configured from def.
+// WithDefinition returns a copy configured from def, preserving the Hub reference.
 func (e *EmitParticipant) WithDefinition(def model.Participant) *EmitParticipant {
-	return &EmitParticipant{def: def}
+	return &EmitParticipant{def: def, hub: e.hub}
 }
 
-// Execute publishes the configured event. CEL evaluation of the payload is
-// responsibility of the parser/engine; here we treat payload as a literal
-// value and return a simple acknowledgement. If Ack is true we simulate an
-// acknowledgement by returning success immediately (stubbed).
-func (e *EmitParticipant) Execute(ctx context.Context, input any) (any, error) {
-	// Use the definition fields directly; payload may be a literal or a
-	// pre-evaluated structure provided by higher layers in future.
+// Execute publishes the configured event via the event hub and returns a
+// structured result map: {event, payload, ack}.
+//
+// The ctx passed by the engine already carries the participant's timeout
+// deadline (from withStepTimeout). For ack mode, Execute uses that deadline
+// directly through PublishAndWaitAck.
+func (e *EmitParticipant) Execute(ctx context.Context, _ any) (any, error) {
 	evt := e.def.Event
 	payload := e.def.Payload
 
-	// Log to stdout for now (stubbing event hub integration).
-	// Keep the behavior deterministic and test-friendly.
-	msg := fmt.Sprintf("emit: event=%s ack=%v payload=%v", evt, e.def.Ack, payload)
-	fmt.Println(msg)
-
-	// Return a simple structured result so callers can inspect what was sent.
-	res := map[string]any{
-		"event":   evt,
-		"payload": payload,
-		"ack":     e.def.Ack,
+	if e.hub != nil {
+		if e.def.Ack {
+			timeout := 30 * time.Second
+			if e.def.Timeout != nil {
+				timeout = e.def.Timeout.Duration
+			}
+			if err := e.hub.PublishAndWaitAck(ctx, evt, payload, timeout); err != nil {
+				if e.def.OnTimeout == "skip" {
+					return map[string]any{"event": evt, "payload": payload, "ack": false}, nil
+				}
+				return nil, fmt.Errorf("emit: ack failed for event %q: %w", evt, err)
+			}
+		} else {
+			if err := e.hub.Publish(ctx, evt, payload); err != nil {
+				return nil, fmt.Errorf("emit: publish failed for event %q: %w", evt, err)
+			}
+		}
 	}
-	return res, nil
+
+	return map[string]any{"event": evt, "payload": payload, "ack": e.def.Ack}, nil
 }

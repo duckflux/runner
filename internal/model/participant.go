@@ -40,7 +40,8 @@ type Participant struct {
 	Tool   string `yaml:"tool,omitempty"`
 
 	// emit
-	Event   string      `yaml:"event,omitempty"`
-	Payload interface{} `yaml:"payload,omitempty"`
-	Ack     bool        `yaml:"ack,omitempty"`
+	Event     string      `yaml:"event,omitempty"`
+	Payload   interface{} `yaml:"payload,omitempty"`
+	Ack       bool        `yaml:"ack,omitempty"`
+	OnTimeout string      `yaml:"onTimeout,omitempty"`
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/duckflux/runner/internal/cel"
+	"github.com/duckflux/runner/internal/eventhub"
 	"github.com/duckflux/runner/internal/model"
 	"github.com/duckflux/runner/internal/participant"
 )
@@ -13,10 +14,21 @@ import (
 // inputs contains the caller-supplied workflow input values (may be nil).
 // env contains process environment variables made available as env.* (may be nil).
 // reg maps each participant name to its Participant implementation.
+// hub is the event hub used by emit and wait.event steps; if nil a new
+// in-memory hub is created for the duration of this execution.
 //
 // The returned value is the resolved workflow output (a plain value, a
 // map[string]any, or nil when no output is defined and no steps succeeded).
-func Run(ctx context.Context, wf *model.Workflow, inputs map[string]any, env map[string]string, reg participant.Registry) (any, error) {
+func Run(ctx context.Context, wf *model.Workflow, inputs map[string]any, env map[string]string, reg participant.Registry, hub *eventhub.Hub) (any, error) {
+	if hub == nil {
+		var err error
+		hub, err = eventhub.New(eventhub.Config{Backend: "memory"})
+		if err != nil {
+			return nil, fmt.Errorf("creating default event hub: %w", err)
+		}
+		defer hub.Close()
+	}
+
 	wfForRuntime := workflowWithInlineParticipants(wf)
 
 	// Build a CEL environment scoped to this workflow's variable declarations.
@@ -39,7 +51,7 @@ func Run(ctx context.Context, wf *model.Workflow, inputs map[string]any, env map
 	}
 
 	// Execute all top-level flow steps sequentially with nil initial chain.
-	lastStep, finalChain, err := runSequential(ctx, wf, wf.Flow, state, celEnv, reg, nil)
+	lastStep, finalChain, err := runSequential(ctx, wf, wf.Flow, state, celEnv, reg, hub, nil)
 	if err != nil {
 		state.Execution.Status = "failed"
 		return nil, err
