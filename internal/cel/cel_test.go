@@ -136,9 +136,9 @@ func TestCompileEnvVar(t *testing.T) {
 	wf := newTestWorkflow(nil, nil)
 	env, _ := NewEnv(wf)
 
-	_, err := env.Compile(`env["TOKEN"] == "secret"`)
+	_, err := env.Compile(`env.TOKEN == "secret"`)
 	if err != nil {
-		t.Fatalf("Compile(env[\"TOKEN\"]) error: %v", err)
+		t.Fatalf("Compile(env.TOKEN) error: %v", err)
 	}
 }
 
@@ -282,7 +282,7 @@ func TestEvalOutputVar(t *testing.T) {
 func TestEvalEnvLookup(t *testing.T) {
 	wf := newTestWorkflow(nil, nil)
 	env, _ := NewEnv(wf)
-	prog, _ := env.Compile(`env["TOKEN"] == "secret"`)
+	prog, _ := env.Compile(`env.TOKEN == "secret"`)
 
 	state := &State{
 		Env: map[string]string{"TOKEN": "secret"},
@@ -292,7 +292,7 @@ func TestEvalEnvLookup(t *testing.T) {
 		t.Fatalf("Eval() error: %v", err)
 	}
 	if result != true {
-		t.Errorf("Eval(env[TOKEN]) = %v, want true", result)
+		t.Errorf("Eval(env.TOKEN) = %v, want true", result)
 	}
 }
 
