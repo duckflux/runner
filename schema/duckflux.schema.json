@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://duckflux.dev/schema/v0.3/duckflux.schema.json",
+  "$id": "https://duckflux.dev/schema/v0.4/duckflux.schema.json",
   "title": "duckflux Workflow",
   "description": "Schema for duckflux — a minimal, deterministic, runtime-agnostic workflow DSL.",
   "type": "object",
@@ -351,6 +351,7 @@
         { "$ref": "#/$defs/parallelStep" },
         { "$ref": "#/$defs/ifStep" },
         { "$ref": "#/$defs/waitStep" },
+        { "$ref": "#/$defs/setStep" },
         { "$ref": "#/$defs/inlineParticipant" },
         { "$ref": "#/$defs/participantOverrideStep" }
       ]
@@ -468,6 +469,32 @@
       }
     },
 
+    "setStep": {
+      "type": "object",
+      "required": ["set"],
+      "additionalProperties": false,
+      "properties": {
+        "set": {
+          "type": "object",
+          "description": "Writes values into execution.context. Each key becomes execution.context.<key>. Values are CEL expressions.",
+          "additionalProperties": {
+            "$ref": "#/$defs/celExpression"
+          },
+          "not": {
+            "anyOf": [
+              { "required": ["workflow"] },
+              { "required": ["execution"] },
+              { "required": ["input"] },
+              { "required": ["output"] },
+              { "required": ["env"] },
+              { "required": ["loop"] },
+              { "required": ["event"] }
+            ]
+          }
+        }
+      }
+    },
+
     "participantOverrideStep": {
       "type": "object",
       "description": "A participant reference with flow-level overrides (timeout, onError, when, input, workflow, etc.).",
@@ -479,6 +506,7 @@
           { "required": ["parallel"] },
           { "required": ["if"] },
           { "required": ["wait"] },
+          { "required": ["set"] },
           { "required": ["type"] }
         ]
       },

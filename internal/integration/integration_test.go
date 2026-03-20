@@ -1276,3 +1276,167 @@ func TestExampleCodeReview(t *testing.T) {
 		t.Errorf("lintResult = %v, want success", m["lintResult"])
 	}
 }
+
+// ── set construct ───────────────────────────────────────────────────────────
+
+func TestSetWritesToExecutionContext(t *testing.T) {
+	yaml := `
+id: set-basic
+participants:
+  check:
+    type: exec
+    run: echo "ok"
+    timeout: 5s
+
+flow:
+  - set:
+      greeting: "'hello'"
+      count: "40 + 2"
+
+  - check
+
+output: execution.context.greeting
+`
+	out, err := runWorkflow(t, yaml, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out != "hello" {
+		t.Fatalf("expected output 'hello', got %v", out)
+	}
+}
+
+func TestSetOverwritesExistingKey(t *testing.T) {
+	yaml := `
+id: set-overwrite
+participants:
+  noop:
+    type: exec
+    run: echo "ok"
+    timeout: 5s
+
+flow:
+  - set:
+      val: "'first'"
+  - set:
+      val: "'second'"
+  - noop
+
+output: execution.context.val
+`
+	out, err := runWorkflow(t, yaml, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out != "second" {
+		t.Fatalf("expected output 'second', got %v", out)
+	}
+}
+
+func TestSetChainPassthrough(t *testing.T) {
+	yaml := `
+id: set-chain
+flow:
+  - type: exec
+    as: step1
+    run: echo "chained-value"
+    timeout: 5s
+
+  - set:
+      marker: "'tagged'"
+
+  - as: step2
+    type: exec
+    run: cat
+    timeout: 5s
+
+output: step2.output
+`
+	out, err := runWorkflow(t, yaml, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	s, ok := out.(string)
+	if !ok {
+		t.Fatalf("expected string output, got %T", out)
+	}
+	if !strings.Contains(s, "chained-value") {
+		t.Fatalf("expected chain passthrough, got %q", s)
+	}
+}
+
+func TestSetWithWorkflowInputs(t *testing.T) {
+	yaml := `
+id: set-inputs
+inputs:
+  name:
+    type: string
+
+participants:
+  noop:
+    type: exec
+    run: echo "ok"
+    timeout: 5s
+
+flow:
+  - set:
+      greeting: "'Hello, ' + workflow.inputs.name"
+  - noop
+
+output: execution.context.greeting
+`
+	out, err := runWorkflow(t, yaml, map[string]any{"name": "World"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out != "Hello, World" {
+		t.Fatalf("expected 'Hello, World', got %v", out)
+	}
+}
+
+func TestSetInsideIfBranch(t *testing.T) {
+	yaml := `
+id: set-if
+inputs:
+  flag:
+    type: string
+    default: "yes"
+
+participants:
+  noop:
+    type: exec
+    run: echo "ok"
+    timeout: 5s
+
+flow:
+  - if:
+      condition: workflow.inputs.flag == "yes"
+      then:
+        - set:
+            result: "'approved'"
+      else:
+        - set:
+            result: "'rejected'"
+  - noop
+
+output: execution.context.result
+`
+	out, err := runWorkflow(t, yaml, map[string]any{"flag": "yes"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out != "approved" {
+		t.Fatalf("expected 'approved', got %v", out)
+	}
+}
+
+func TestSetExampleFile(t *testing.T) {
+	dir := examplesDir(t)
+	out, err := runWorkflowFile(t, filepath.Join(dir, "set.flow.yaml"), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out != "my-token" {
+		t.Fatalf("expected 'my-token', got %v", out)
+	}
+}

@@ -240,6 +240,17 @@ func validateFlowSteps(steps []model.FlowStep, participants map[string]model.Par
 			validateFlowSteps(ifStep.Then, participants, celEnv, stepPath+".then", loopAlias, errs)
 			validateFlowSteps(ifStep.Else, participants, celEnv, stepPath+".else", loopAlias, errs)
 
+		case step.Set != nil:
+			for key, expr := range step.Set.Values {
+				if model.IsReservedName(key) {
+					*errs = append(*errs, &ValidationError{
+						Field:   stepPath + ".set." + key,
+						Message: fmt.Sprintf("set key %q is a reserved name", key),
+					})
+				}
+				compileCEL(celEnv, rewriteLoopAlias(expr, loopAlias), stepPath+".set."+key, errs)
+			}
+
 		case step.Wait != nil:
 			w := step.Wait
 			// A wait step must specify at least one of: event, until (CEL) or timeout.

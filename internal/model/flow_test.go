@@ -73,3 +73,32 @@ func TestFlowUnmarshal_WaitInlineLoopIf(t *testing.T) {
 		t.Fatalf("expected if.condition 'true', got %q", wf.Flow[3].If.Condition)
 	}
 }
+
+func TestFlowUnmarshal_Set(t *testing.T) {
+	data := `flow:
+  - set:
+      token: workflow.inputs.api_token
+      region: "'us-east-1'"
+`
+	var wf Workflow
+	if err := yaml.Unmarshal([]byte(data), &wf); err != nil {
+		t.Fatalf("unmarshal workflow: %v", err)
+	}
+
+	if len(wf.Flow) != 1 {
+		t.Fatalf("expected 1 flow step, got %d", len(wf.Flow))
+	}
+
+	if wf.Flow[0].Set == nil {
+		t.Fatalf("expected set step at index 0")
+	}
+	if len(wf.Flow[0].Set.Values) != 2 {
+		t.Fatalf("expected 2 set values, got %d", len(wf.Flow[0].Set.Values))
+	}
+	if wf.Flow[0].Set.Values["token"] != "workflow.inputs.api_token" {
+		t.Fatalf("expected token expression, got %q", wf.Flow[0].Set.Values["token"])
+	}
+	if wf.Flow[0].Set.Values["region"] != "'us-east-1'" {
+		t.Fatalf("expected region expression, got %q", wf.Flow[0].Set.Values["region"])
+	}
+}

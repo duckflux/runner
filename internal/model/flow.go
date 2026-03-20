@@ -24,6 +24,8 @@ type FlowStep struct {
 	InlineParticipant *Participant
 	// Wait is set for a wait control construct, e.g. `- wait: {...}`.
 	Wait *WaitStep
+	// Set is set for a set control construct, e.g. `- set: {key: expr}`.
+	Set *SetStep
 }
 
 // UnmarshalYAML implements yaml.Unmarshaler for FlowStep.
@@ -118,6 +120,14 @@ func (f *FlowStep) UnmarshalYAML(value *yaml.Node) error {
 			f.Wait = w
 			return nil
 
+		case "set":
+			var values map[string]string
+			if err := value.Content[1].Decode(&values); err != nil {
+				return fmt.Errorf("decoding set step: %w", err)
+			}
+			f.Set = &SetStep{Values: values}
+			return nil
+
 		// Detect inline participant definitions: mappings that contain a `type`
 		// field (and optionally `as`). These are full participant defs used
 		// inline in the flow rather than a named override.
@@ -186,6 +196,12 @@ type IfStep struct {
 	Condition string     `yaml:"condition"`
 	Then      []FlowStep `yaml:"then"`
 	Else      []FlowStep `yaml:"else,omitempty"`
+}
+
+// SetStep assigns values to execution.context via CEL expressions.
+type SetStep struct {
+	// Values maps context keys to CEL expressions.
+	Values map[string]string
 }
 
 // ParticipantOverrideStep invokes a participant with optional per-invocation overrides.

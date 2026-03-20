@@ -225,6 +225,25 @@ func runIf(ctx context.Context, wf *model.Workflow, step *model.IfStep, state *c
 	return "", chain, nil
 }
 
+// runSet evaluates each CEL expression in the set step and writes the result
+// into execution.context. It does not produce output and the I/O chain passes
+// through unchanged.
+func runSet(wf *model.Workflow, step *model.SetStep, state *cel.State, celEnv *cel.Environment) error {
+	state.Now = time.Now().UTC()
+	for key, expr := range step.Values {
+		prog, err := celEnv.Compile(expr)
+		if err != nil {
+			return fmt.Errorf("set %q: compiling expression: %w", key, err)
+		}
+		val, err := celEnv.Eval(prog, state)
+		if err != nil {
+			return fmt.Errorf("set %q: evaluating expression: %w", key, err)
+		}
+		state.Execution.Context[key] = val
+	}
+	return nil
+}
+
 // rewriteFlowStepsForLoopAs returns a new slice of FlowStep where occurrences
 // of the loop alias (e.g. "attempt.") inside any string CEL expressions are
 // replaced with the canonical "loop." form so the CEL compiler can handle
@@ -270,6 +289,15 @@ func rewriteFlowStepsForLoopAs(steps []model.FlowStep, as string) []model.FlowSt
 			i.Then = rewriteFlowStepsForLoopAs(i.Then, as)
 			i.Else = rewriteFlowStepsForLoopAs(i.Else, as)
 			ns.If = &i
+		}
+		if ns.Set != nil {
+			s := *ns.Set
+			newValues := make(map[string]string, len(s.Values))
+			for k, v := range s.Values {
+				newValues[k] = strings.ReplaceAll(v, prefix, "loop.")
+			}
+			s.Values = newValues
+			ns.Set = &s
 		}
 		if ns.InlineParticipant != nil {
 			p := *ns.InlineParticipant

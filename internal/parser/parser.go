@@ -101,6 +101,9 @@ func collectInlineParticipantsWalk(steps []model.FlowStep, out map[string]model.
 		if s.Override != nil {
 			continue
 		}
+		if s.Set != nil {
+			continue
+		}
 		if s.Loop != nil {
 			collectInlineParticipantsWalk(s.Loop.Steps, out, stepPath+".loop.steps", errs)
 			continue

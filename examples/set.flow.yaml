@@ -1,0 +1,26 @@
+id: set-example
+name: Set Context Variables
+version: "1"
+
+inputs:
+  api_token:
+    type: string
+    default: "my-token"
+
+participants:
+  show_context:
+    type: exec
+    run: echo "token=${TOKEN} region=${REGION}"
+    timeout: 5s
+
+flow:
+  - set:
+      token: workflow.inputs.api_token
+      region: "'us-east-1'"
+
+  - as: show
+    type: exec
+    run: echo '{"token":"set","region":"set"}'
+    timeout: 5s
+
+output: execution.context.token

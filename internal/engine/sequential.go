@@ -95,6 +95,13 @@ func runFlowStep(ctx context.Context, wf *model.Workflow, step model.FlowStep, s
 		// wait does not produce output; chain unchanged
 		return "", chain, nil
 
+	case step.Set != nil:
+		if err := runSet(wf, step.Set, state, celEnv); err != nil {
+			return "", nil, err
+		}
+		// set does not produce output; chain unchanged
+		return "", chain, nil
+
 	case step.InlineParticipant != nil:
 		def := *step.InlineParticipant
 		out, err := runInlineParticipant(ctx, wf, &def, state, celEnv, reg, hub, chain)

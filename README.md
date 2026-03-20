@@ -177,8 +177,9 @@ Participants are named steps that can be referenced in the flow. Each has a `typ
 | `parallel` | Run steps concurrently |
 | `if/then/else` | Conditional branching |
 | `when` | Guard condition on a single step |
+| `set` | Assign values to `execution.context` |
 
-Note (spec v0.3):
+Note (spec v0.4):
 
 - **Implicit I/O chain**: The output of step N automatically becomes the input of step N+1. When no explicit `output:` is defined, the workflow returns the final chain value.
 - **Variable namespaces**: Workflow-level inputs are accessed via `workflow.inputs.*`. Inside a participant step, `input` refers to the participant's scoped input (chain + explicit merge) and `output` refers to the participant's output.
@@ -189,6 +190,7 @@ Note (spec v0.3):
 - Inline participants are supported: a `flow` step can contain an inline participant definition instead of referencing the top-level `participants:` map. Named inline `as` values must be globally unique.
 - `loop` supports the `as` field to rename the loop context (for example `as: attempt` exposes `attempt.index`). The runner rewrites the context for CEL expressions.
 - `if` is now an object with a `condition` field: `if: { condition: "expr", then: [...], else: [...] }`.
+- The `set` construct writes values to `execution.context` via CEL expressions — a flow-level control operation that passes the I/O chain through unchanged.
 
 ### Error Handling
 
@@ -331,6 +333,25 @@ flow:
 
 # This runs the inline exec once and doesn't require a named participant entry
 ```
+
+### Set example
+
+The `set` construct writes values into `execution.context` ([`examples/set.flow.yaml`](examples/set.flow.yaml)):
+
+```yaml
+flow:
+  - set:
+      token: workflow.inputs.api_token
+      region: "'us-east-1'"
+
+  - as: fetch
+    type: http
+    url: "'https://api.example.com/data'"
+    headers:
+      Authorization: "'Bearer ' + execution.context.token"
+```
+
+`set` is a flow-level construct (like `if` or `wait`) — it does not produce output, and the implicit I/O chain passes through unchanged.
 
 ### Wait example
 
