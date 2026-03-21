@@ -127,6 +127,12 @@ func precompileFlowSteps(e *Environment, steps []model.FlowStep, path string, lo
 					return fmt.Errorf("precompiling %s.wait.match: %w", stepPath, err)
 				}
 			}
+		case step.Set != nil:
+			for key, expr := range step.Set.Values {
+				if _, err := e.Compile(rewriteLoopAlias(expr, loopAlias)); err != nil {
+					return fmt.Errorf("precompiling %s.set.%s: %w", stepPath, key, err)
+				}
+			}
 		case step.InlineParticipant != nil:
 			p := step.InlineParticipant
 			if p.When != "" {
