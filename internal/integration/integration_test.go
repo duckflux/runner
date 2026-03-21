@@ -1440,3 +1440,163 @@ func TestSetExampleFile(t *testing.T) {
 		t.Fatalf("expected 'my-token', got %v", out)
 	}
 }
+
+// --- v0.5 Input Merge on Flow Override ---
+
+func TestV05_FlowOverrideInputMergesWithParticipantBase(t *testing.T) {
+	// Participant declares base input {A: "base-a"}.
+	// Flow override adds {B: "override-b"}.
+	// Result should be merged: {A: "base-a", B: "override-b"}.
+	yaml := `
+participants:
+  worker:
+    type: exec
+    run: cat
+    input:
+      A: '"base-a"'
+flow:
+  - worker:
+      input:
+        B: '"override-b"'
+`
+	out, err := runWorkflow(t, yaml, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	m, ok := out.(map[string]any)
+	if !ok {
+		t.Fatalf("output type = %T, want map[string]any", out)
+	}
+	if m["A"] != "base-a" {
+		t.Errorf("A = %v, want base-a", m["A"])
+	}
+	if m["B"] != "override-b" {
+		t.Errorf("B = %v, want override-b", m["B"])
+	}
+}
+
+func TestV05_FlowOverrideInputWinsOnConflict(t *testing.T) {
+	// Participant declares base input {X: "base"}.
+	// Flow override provides {X: "override"}.
+	// Override should win on key conflict.
+	yaml := `
+participants:
+  worker:
+    type: exec
+    run: cat
+    input:
+      X: '"base"'
+flow:
+  - worker:
+      input:
+        X: '"override"'
+`
+	out, err := runWorkflow(t, yaml, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	m, ok := out.(map[string]any)
+	if !ok {
+		t.Fatalf("output type = %T, want map[string]any", out)
+	}
+	if m["X"] != "override" {
+		t.Errorf("X = %v, want override", m["X"])
+	}
+}
+
+func TestV05_ThreeWayMergeChainBaseOverride(t *testing.T) {
+	// Chain provides {C: "chain-c"}, participant base provides {B: "base-b"},
+	// flow override provides {O: "override-o"}.
+	// All three should merge with precedence: chain < base < override.
+	yaml := `
+participants:
+  produce:
+    type: exec
+    run: printf '{"C":"chain-c"}'
+  consume:
+    type: exec
+    run: cat
+    input:
+      B: '"base-b"'
+flow:
+  - produce
+  - consume:
+      input:
+        O: '"override-o"'
+`
+	out, err := runWorkflow(t, yaml, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	m, ok := out.(map[string]any)
+	if !ok {
+		t.Fatalf("output type = %T, want map[string]any", out)
+	}
+	if m["C"] != "chain-c" {
+		t.Errorf("C = %v, want chain-c", m["C"])
+	}
+	if m["B"] != "base-b" {
+		t.Errorf("B = %v, want base-b", m["B"])
+	}
+	if m["O"] != "override-o" {
+		t.Errorf("O = %v, want override-o", m["O"])
+	}
+}
+
+func TestV05_ThreeWayMergeConflictPrecedence(t *testing.T) {
+	// All three sources provide the same key "K".
+	// Precedence: chain < base < override → override should win.
+	yaml := `
+participants:
+  produce:
+    type: exec
+    run: printf '{"K":"from-chain"}'
+  consume:
+    type: exec
+    run: cat
+    input:
+      K: '"from-base"'
+flow:
+  - produce
+  - consume:
+      input:
+        K: '"from-override"'
+`
+	out, err := runWorkflow(t, yaml, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	m, ok := out.(map[string]any)
+	if !ok {
+		t.Fatalf("output type = %T, want map[string]any", out)
+	}
+	if m["K"] != "from-override" {
+		t.Errorf("K = %v, want from-override", m["K"])
+	}
+}
+
+func TestV05_FlowOverrideWithoutBaseInputBehavesAsExplicit(t *testing.T) {
+	// Participant has no base input, flow override provides input.
+	// Should behave as before — override is the sole explicit input.
+	yaml := `
+participants:
+  worker:
+    type: exec
+    run: cat
+flow:
+  - worker:
+      input:
+        X: '"only-override"'
+`
+	out, err := runWorkflow(t, yaml, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	m, ok := out.(map[string]any)
+	if !ok {
+		t.Fatalf("output type = %T, want map[string]any", out)
+	}
+	if m["X"] != "only-override" {
+		t.Errorf("X = %v, want only-override", m["X"])
+	}
+}

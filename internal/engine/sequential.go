@@ -161,26 +161,39 @@ func runParticipantStep(ctx context.Context, wf *model.Workflow, name string, ov
 		}
 	}
 
-	// Determine the effective input: flow-level override takes priority.
-	var rawInput interface{}
+	// Evaluate participant base input.
+	var baseInput interface{}
+	if def.Input != nil {
+		var err error
+		baseInput, err = evalInput(def.Input, state, celEnv)
+		if err != nil {
+			return nil, fmt.Errorf("participant %q: evaluating base input: %w", name, err)
+		}
+	}
+
+	// Evaluate flow-level override input (if present).
+	var overrideInput interface{}
 	if override != nil && override.Input != nil {
-		rawInput = override.Input
-	} else {
-		rawInput = def.Input
+		var err error
+		overrideInput, err = evalInput(override.Input, state, celEnv)
+		if err != nil {
+			return nil, fmt.Errorf("participant %q: evaluating override input: %w", name, err)
+		}
 	}
+
+	// Merge per v0.5 spec: chain < participant base input < flow override input.
+	// Step 1: merge chain with base input.
+	merged, err := mergeChainedInput(chain, baseInput)
+	if err != nil {
+		return nil, fmt.Errorf("participant %q: merging chain with base input: %w", name, err)
+	}
+	// Step 2: merge result with flow override input.
+	input, err := mergeChainedInput(merged, overrideInput)
+	if err != nil {
+		return nil, fmt.Errorf("participant %q: merging with override input: %w", name, err)
+	}
+
 	var effectiveCWD string
-
-	// Evaluate input CEL expressions to produce the concrete input value.
-	explicitInput, err := evalInput(rawInput, state, celEnv)
-	if err != nil {
-		return nil, fmt.Errorf("participant %q: evaluating input: %w", name, err)
-	}
-
-	// Merge chain input with explicit input per v0.3 spec.
-	input, err := mergeChainedInput(chain, explicitInput)
-	if err != nil {
-		return nil, fmt.Errorf("participant %q: merging chain input: %w", name, err)
-	}
 
 	// Set participant-scoped input for CEL expressions during execution.
 	state.CurrentInput = input
