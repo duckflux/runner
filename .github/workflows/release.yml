@@ -61,8 +61,10 @@ jobs:
 
           cp "dist/duckflux_${VERSION}_amd64.deb" /tmp/apt-repo/pool/main/
 
-          dpkg-scanpackages --multiversion /tmp/apt-repo/pool/main > /tmp/apt-repo/dists/stable/main/binary-amd64/Packages
-          gzip -k -f /tmp/apt-repo/dists/stable/main/binary-amd64/Packages
+          cd /tmp/apt-repo
+
+          dpkg-scanpackages --multiversion pool/main > dists/stable/main/binary-amd64/Packages
+          gzip -k -f dists/stable/main/binary-amd64/Packages
 
           cat > /tmp/release.conf <<EOF
           APT::FTPArchive::Release::Origin "duckflux";
@@ -73,22 +75,21 @@ jobs:
           APT::FTPArchive::Release::Components "main";
           EOF
 
-          apt-ftparchive -c /tmp/release.conf release /tmp/apt-repo/dists/stable > /tmp/apt-repo/dists/stable/Release
+          apt-ftparchive -c /tmp/release.conf release dists/stable > dists/stable/Release
 
           echo "$GPG_PASSPHRASE" | gpg --batch --yes --passphrase-fd 0 --pinentry-mode loopback \
-            --clearsign -o /tmp/apt-repo/dists/stable/InRelease /tmp/apt-repo/dists/stable/Release
+            --clearsign -o dists/stable/InRelease dists/stable/Release
           echo "$GPG_PASSPHRASE" | gpg --batch --yes --passphrase-fd 0 --pinentry-mode loopback \
-            -abs -o /tmp/apt-repo/dists/stable/Release.gpg /tmp/apt-repo/dists/stable/Release
+            -abs -o dists/stable/Release.gpg dists/stable/Release
 
-          git -C /tmp/apt-repo config user.name "github-actions[bot]"
-          git -C /tmp/apt-repo config user.email "github-actions[bot]@users.noreply.github.com"
-          git -C /tmp/apt-repo add .
-          git -C /tmp/apt-repo commit -m "release: duckflux v${VERSION}"
-          git -C /tmp/apt-repo push
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "release: duckflux v${VERSION}"
+          git push
 
-          echo -e ".git\nnode_modules" > /tmp/apt-repo/.assetsignore
           npm install --global wrangler
-          cd /tmp/apt-repo && wrangler deploy
+          wrangler deploy
 
       - name: Update homebrew-tap
         env:
