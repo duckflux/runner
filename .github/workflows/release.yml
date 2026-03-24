@@ -75,9 +75,9 @@ jobs:
 
           apt-ftparchive -c /tmp/release.conf release /tmp/apt-repo/dists/stable > /tmp/apt-repo/dists/stable/Release
 
-          echo "$GPG_PASSPHRASE" | gpg --batch --yes --passphrase-fd 0 \
+          echo "$GPG_PASSPHRASE" | gpg --batch --yes --passphrase-fd 0 --pinentry-mode loopback \
             --clearsign -o /tmp/apt-repo/dists/stable/InRelease /tmp/apt-repo/dists/stable/Release
-          echo "$GPG_PASSPHRASE" | gpg --batch --yes --passphrase-fd 0 \
+          echo "$GPG_PASSPHRASE" | gpg --batch --yes --passphrase-fd 0 --pinentry-mode loopback \
             -abs -o /tmp/apt-repo/dists/stable/Release.gpg /tmp/apt-repo/dists/stable/Release
 
           git -C /tmp/apt-repo add .
