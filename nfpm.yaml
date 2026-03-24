@@ -1,5 +1,5 @@
 name: duckflux
-version: "1.0.0"
+version: "${VERSION}"
 arch: amd64
 maintainer: duckflux <seu@email.com>
 description: Task runner

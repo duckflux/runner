@@ -1,0 +1,105 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Extract version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+
+      - name: Build binaries
+        run: |
+          mkdir -p dist bin
+          GOOS=linux  GOARCH=amd64 go build -ldflags "-s -w -X main.version=$VERSION" -o dist/duckflux-linux-amd64  ./cmd/duckflux
+          GOOS=darwin GOARCH=amd64 go build -ldflags "-s -w -X main.version=$VERSION" -o dist/duckflux-darwin-amd64 ./cmd/duckflux
+          GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w -X main.version=$VERSION" -o dist/duckflux-darwin-arm64 ./cmd/duckflux
+
+      - name: Install nfpm
+        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+
+      - name: Build .deb
+        run: |
+          cp dist/duckflux-linux-amd64 bin/duckflux
+          nfpm pkg --packager deb --target dist/duckflux_${VERSION}_amd64.deb
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/duckflux-linux-amd64
+            dist/duckflux-darwin-amd64
+            dist/duckflux-darwin-arm64
+            dist/duckflux_${{ env.VERSION }}_amd64.deb
+
+      - name: Update apt-repo
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        run: |
+          gh auth setup-git
+          gh repo clone duckflux/apt-repo /tmp/apt-repo
+
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+
+          cp "dist/duckflux_${VERSION}_amd64.deb" /tmp/apt-repo/pool/main/
+
+          dpkg-scanpackages --multiversion /tmp/apt-repo/pool/main > /tmp/apt-repo/dists/stable/main/binary-amd64/Packages
+          gzip -k -f /tmp/apt-repo/dists/stable/main/binary-amd64/Packages
+
+          cat > /tmp/release.conf <<EOF
+          APT::FTPArchive::Release::Origin "duckflux";
+          APT::FTPArchive::Release::Label "duckflux";
+          APT::FTPArchive::Release::Suite "stable";
+          APT::FTPArchive::Release::Codename "stable";
+          APT::FTPArchive::Release::Architectures "amd64";
+          APT::FTPArchive::Release::Components "main";
+          EOF
+
+          apt-ftparchive -c /tmp/release.conf release /tmp/apt-repo/dists/stable > /tmp/apt-repo/dists/stable/Release
+
+          echo "$GPG_PASSPHRASE" | gpg --batch --yes --passphrase-fd 0 \
+            --clearsign -o /tmp/apt-repo/dists/stable/InRelease /tmp/apt-repo/dists/stable/Release
+          echo "$GPG_PASSPHRASE" | gpg --batch --yes --passphrase-fd 0 \
+            -abs -o /tmp/apt-repo/dists/stable/Release.gpg /tmp/apt-repo/dists/stable/Release
+
+          git -C /tmp/apt-repo add .
+          git -C /tmp/apt-repo commit -m "release: duckflux v${VERSION}"
+          git -C /tmp/apt-repo push
+
+          npm install --prefix /tmp/apt-repo --no-save wrangler
+          npx --prefix /tmp/apt-repo wrangler deploy --config /tmp/apt-repo/wrangler.jsonc
+
+      - name: Update homebrew-tap
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          gh auth setup-git
+          gh repo clone duckflux/homebrew-tap /tmp/homebrew-tap
+
+          TARBALL_URL="https://github.com/duckflux/runner/archive/refs/tags/v${VERSION}.tar.gz"
+          SHA256=$(curl -sL "$TARBALL_URL" | sha256sum | awk '{print $1}')
+
+          sed -i "s|url \".*\"|url \"${TARBALL_URL}\"|" /tmp/homebrew-tap/Formula/runner.rb
+          sed -i "s|sha256 \".*\"|sha256 \"${SHA256}\"|" /tmp/homebrew-tap/Formula/runner.rb
+
+          git -C /tmp/homebrew-tap add Formula/runner.rb
+          git -C /tmp/homebrew-tap commit -m "release: duckflux v${VERSION}"
+          git -C /tmp/homebrew-tap push
