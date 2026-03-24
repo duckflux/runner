@@ -80,6 +80,8 @@ jobs:
           echo "$GPG_PASSPHRASE" | gpg --batch --yes --passphrase-fd 0 --pinentry-mode loopback \
             -abs -o /tmp/apt-repo/dists/stable/Release.gpg /tmp/apt-repo/dists/stable/Release
 
+          git -C /tmp/apt-repo config user.name "github-actions[bot]"
+          git -C /tmp/apt-repo config user.email "github-actions[bot]@users.noreply.github.com"
           git -C /tmp/apt-repo add .
           git -C /tmp/apt-repo commit -m "release: duckflux v${VERSION}"
           git -C /tmp/apt-repo push
@@ -100,6 +102,8 @@ jobs:
           sed -i "s|url \".*\"|url \"${TARBALL_URL}\"|" /tmp/homebrew-tap/Formula/runner.rb
           sed -i "s|sha256 \".*\"|sha256 \"${SHA256}\"|" /tmp/homebrew-tap/Formula/runner.rb
 
+          git -C /tmp/homebrew-tap config user.name "github-actions[bot]"
+          git -C /tmp/homebrew-tap config user.email "github-actions[bot]@users.noreply.github.com"
           git -C /tmp/homebrew-tap add Formula/runner.rb
           git -C /tmp/homebrew-tap commit -m "release: duckflux v${VERSION}"
           git -C /tmp/homebrew-tap push
