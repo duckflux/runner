@@ -86,8 +86,8 @@ jobs:
           git -C /tmp/apt-repo commit -m "release: duckflux v${VERSION}"
           git -C /tmp/apt-repo push
 
-          npm install --prefix /tmp/apt-repo --no-save wrangler
-          npx --prefix /tmp/apt-repo wrangler deploy --config /tmp/apt-repo/wrangler.jsonc
+          npm install --global wrangler
+          wrangler deploy --config /tmp/apt-repo/wrangler.jsonc
 
       - name: Update homebrew-tap
         env:
